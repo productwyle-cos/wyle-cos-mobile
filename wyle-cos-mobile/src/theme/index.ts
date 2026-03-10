@@ -1,42 +1,59 @@
-// ─── Wyle Brand Theme ─────────────────────────────────────────────────────────
-// Approved by Amrutha Veluthakal
+// ─── Wyle Brand Theme — v2 (corrected from brand guidelines PDF) ──────────────
+// Source: Wyle_brand_guidelines_.pdf
 
 export const Colors = {
-  // Backgrounds
-  background: '#000000',        // Jet Black
-  surface: '#0D0D0D',
-  surfaceElevated: '#1A1A1A',
-  surfaceHigh: '#242424',
+  // ── Core backgrounds ───────────────────────────────────────────────────────
+  background: '#002F3A',        // Jet Black (primary dark background)
+  backgroundPure: '#000000',    // Pure black (splash, overlays)
+  surface: '#0A3D4A',           // Slightly lighter than jet black
+  surfaceElevated: '#0F4A5A',   // Cards, elevated surfaces
+  surfaceHigh: '#155060',       // Active states
 
-  // Brand
-  sweetSalmon: '#FF9E8A',       // Quick questions
-  crimson: '#DC143C',           // Warnings / errors
-  yellow: '#E8FF00',            // CTA / Add to cart / Payments
-  verdigris: '#40B0A6',         // Buddy positive / response
-  salmon: '#FA8072',            // Buddy talking
+  // ── Primary brand colors ───────────────────────────────────────────────────
+  verdigris: '#1B998B',         // PRIMARY — trust, balance, coordination
+  verdigrisDark: '#157A6E',     // Pressed / deep verdigris
 
-  // Text
-  textPrimary: '#FFFFFF',
-  textSecondary: '#AAAAAA',
-  textTertiary: '#555555',
-  textInverse: '#000000',
+  // ── Secondary palette ──────────────────────────────────────────────────────
+  chartreuse: '#D5FF3F',        // CTA / action / innovation spark (NOT yellow-green)
+  sweetSalmon: '#FF9F8A',       // Warmth, approachability, buddy
+  crimson: '#D7263D',           // Urgency, high risk, errors
+  white: '#FEFFFE',             // Clarity, breathing space
 
-  // Risk
-  riskHigh: '#DC143C',
-  riskMedium: '#E8FF00',
-  riskLow: '#40B0A6',
+  // ── Text ───────────────────────────────────────────────────────────────────
+  textPrimary: '#FEFFFE',       // White — all body text
+  textSecondary: '#8FB8BF',     // Muted teal-white
+  textTertiary: '#4A7A85',      // Placeholder, disabled
+  textInverse: '#002F3A',       // Text on bright backgrounds (chartreuse, salmon)
 
-  // Status
-  success: '#40B0A6',
-  warning: '#E8FF00',
-  error: '#DC143C',
-  info: '#FF9E8A',
+  // ── Semantic ───────────────────────────────────────────────────────────────
+  riskHigh: '#D7263D',          // Crimson
+  riskMedium: '#D5FF3F',        // Chartreuse
+  riskLow: '#1B998B',           // Verdigris
+  success: '#1B998B',
+  warning: '#D5FF3F',
+  error: '#D7263D',
 
-  // UI
-  border: '#2A2A2A',
-  divider: '#1A1A1A',
-  overlay: 'rgba(0,0,0,0.75)',
+  // ── UI ─────────────────────────────────────────────────────────────────────
+  border: '#1A5060',
+  divider: '#0F3D4A',
+  overlay: 'rgba(0,47,58,0.85)',
   transparent: 'transparent',
+};
+
+// ── Typography — brand fonts from guidelines ────────────────────────────────
+// Headline: Poppins Bold
+// Subtitle: Montserrat
+// Body: Inter
+// UI/CTA: Inter
+export const Fonts = {
+  headline: 'Poppins_700Bold',
+  headlineMedium: 'Poppins_600SemiBold',
+  subtitle: 'Montserrat_600SemiBold',
+  subtitleRegular: 'Montserrat_400Regular',
+  body: 'Inter_400Regular',
+  bodyMedium: 'Inter_500Medium',
+  bodySemibold: 'Inter_600SemiBold',
+  ui: 'Inter_600SemiBold',
 };
 
 export const Typography = {
@@ -49,6 +66,7 @@ export const Typography = {
     xl: 24,
     xxl: 30,
     display: 42,
+    hero: 56,
   },
   weight: {
     regular: '400' as const,
@@ -57,6 +75,11 @@ export const Typography = {
     bold: '700' as const,
     heavy: '800' as const,
   },
+  // Usage map from brand doc:
+  // Headlines    → Poppins Bold    (large display, screen titles)
+  // Subtitles    → Montserrat      (section headers, card titles)
+  // Body         → Inter           (paragraphs, descriptions)
+  // UI/CTA       → Inter SemiBold  (buttons, labels, nav)
 };
 
 export const Spacing = {
@@ -74,6 +97,7 @@ export const Radius = {
   md: 12,
   lg: 16,
   xl: 24,
+  xxl: 32,
   full: 999,
 };
 
@@ -81,24 +105,31 @@ export const Shadows = {
   card: {
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
   },
-  glow: {
-    shadowColor: Colors.verdigris,
+  glowVerdigris: {
+    shadowColor: '#1B998B',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  glowChartreuse: {
+    shadowColor: '#D5FF3F',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.35,
     shadowRadius: 12,
     elevation: 10,
   },
-  glowYellow: {
-    shadowColor: Colors.yellow,
+  glowCrimson: {
+    shadowColor: '#D7263D',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 10,
   },
 };
 
-export default { Colors, Typography, Spacing, Radius, Shadows };
+export default { Colors, Typography, Fonts, Spacing, Radius, Shadows };
