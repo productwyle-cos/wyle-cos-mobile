@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NavProp } from '../../../app/index';
 
-export default function InsightsScreen({ navigation }: { navigation: NavProp }) {
+export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
   return (
     <View style={s.container}>
       <SafeAreaView style={s.safe}>
@@ -11,9 +11,9 @@ export default function InsightsScreen({ navigation }: { navigation: NavProp }) 
           <Text style={s.backText}>← Home</Text>
         </TouchableOpacity>
         <View style={s.center}>
-          <Text style={s.emoji}>◈</Text>
-          <Text style={s.title}>Insights</Text>
-          <Text style={s.sub}>LOS breakdown & stats — building for Saturday demo.</Text>
+          <Text style={s.emoji}>◎</Text>
+          <Text style={s.title}>Buddy</Text>
+          <Text style={s.sub}>Your AI assistant — building for Saturday demo.</Text>
         </View>
       </SafeAreaView>
     </View>
