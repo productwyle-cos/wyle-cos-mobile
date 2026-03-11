@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import type { NavProp } from '../../../app/index';
+import { VoiceService } from '../../services/voiceService';
 
 const { width } = Dimensions.get('window');
 
@@ -322,13 +323,19 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
   };
 
   // ── Voice recording flow ────────────────────────────────────────────────────
-  const handleVoicePress = async () => {
-    if (voiceState === 'recording') {
-      await stopRecording();
-    } else if (voiceState === 'idle') {
-      await startRecording();
-    }
-  };
+const handleVoicePress = () => {
+  if (voiceState === 'recording') {
+    VoiceService.stop(
+      (transcript) => sendMessage(transcript, true), // transcript → Claude
+      setVoiceState
+    );
+  } else if (voiceState === 'idle') {
+    VoiceService.start(
+      (transcript) => sendMessage(transcript, true),
+      setVoiceState
+    );
+  }
+};
 
   const startRecording = async () => {
     try {
