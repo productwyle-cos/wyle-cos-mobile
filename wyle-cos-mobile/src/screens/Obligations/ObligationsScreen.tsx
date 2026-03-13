@@ -68,7 +68,6 @@ function TabBar({ active, onTab }: { active: string; onTab: (s: any) => void }) 
   const tabs = [
     { screen: 'home', emoji: '⌂', label: 'Home' },
     { screen: 'obligations', emoji: '📋', label: 'Tasks' },
-    { screen: 'food', emoji: '🍽️', label: 'Food' },
     { screen: 'buddy', emoji: '◎', label: 'Buddy' },
     { screen: 'insights', emoji: '◈', label: 'Insights' },
   ];

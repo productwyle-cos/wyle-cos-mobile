@@ -97,7 +97,6 @@ function TabBar({ active, onTab }: { active: string; onTab: (s: any) => void }) 
   const tabs = [
     { screen: 'home',        emoji: '⌂', label: 'Home'    },
     { screen: 'obligations', emoji: '📋', label: 'Tasks'   },
-    { screen: 'food',        emoji: '🍽️', label: 'Food'    },
     { screen: 'buddy',       emoji: '◎',  label: 'Buddy'   },
     { screen: 'insights',    emoji: '◈',  label: 'Insights'},
   ];
@@ -211,7 +210,6 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
         <Animated.View style={[styles.section, { opacity: fadeIn }]}>
           <Text style={styles.sectionTitle}>Quick actions</Text>
           <View style={styles.qaGrid}>
-            <QuickAction emoji="🍽️" label="Order food"   color={C.salmon}    onPress={() => nav.navigate('food')}        />
             <QuickAction emoji="◎"  label="Ask Buddy"    color={C.verdigris}  onPress={() => nav.navigate('buddy')}       />
             <QuickAction emoji="📋" label="Obligations"  color={C.chartreuse} onPress={() => nav.navigate('obligations')} />
             <QuickAction emoji="◈"  label="Insights"     color={C.textSec}    onPress={() => nav.navigate('insights')}    />

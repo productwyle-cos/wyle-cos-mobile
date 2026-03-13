@@ -8,7 +8,6 @@ import { useAppStore } from '../store';
 // ─── Screens ──────────────────────────────────────────────────────────────────
 import HomeScreen from '../screens/Home/HomeScreen';
 import ObligationsScreen from '../screens/Obligations/ObligationsScreen';
-import FoodScreen from '../screens/Food/FoodScreen';
 import BuddyScreen from '../screens/Buddy/BuddyScreen';
 import InsightsScreen from '../screens/Insights/InsightsScreen';
 import WelcomeScreen from '../screens/Onboarding/WelcomeScreen';
@@ -24,7 +23,6 @@ const Tab = createBottomTabNavigator();
 const TAB_ICONS: Record<string, string> = {
   Home: '⌂',
   Obligations: '📋',
-  Food: '🍽️',
   Buddy: '◎',
   Insights: '◈',
 };
@@ -65,7 +63,6 @@ function MainTabs() {
     >
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Obligations" component={ObligationsScreen} />
-      <Tab.Screen name="Food" component={FoodScreen} />
       <Tab.Screen name="Buddy" component={BuddyScreen} />
       <Tab.Screen name="Insights" component={InsightsScreen} />
     </Tab.Navigator>

@@ -68,7 +68,6 @@ type VoiceState = 'idle' | 'recording' | 'transcribing';
 
 const QUICK_PROMPTS = [
   { label: '📋 Urgent items',  text: 'What are my most urgent tasks right now?' },
-  { label: '🍽️ Order food',    text: 'I want to order food. What do you suggest?' },
   { label: '🛂 Visa help',     text: 'Help me renew my UAE residence visa.' },
   { label: '⏱️ Morning brief', text: 'Give me my morning brief for today.' },
   { label: '💡 Pay DEWA',      text: 'Help me pay my DEWA bill.' },
@@ -80,7 +79,6 @@ function TabBar({ active, onTab }: { active: string; onTab: (s: any) => void }) 
   const tabs = [
     { screen: 'home',        emoji: '⌂',  label: 'Home'     },
     { screen: 'obligations', emoji: '📋', label: 'Tasks'    },
-    { screen: 'food',        emoji: '🍽️', label: 'Food'     },
     { screen: 'buddy',       emoji: '◎',  label: 'Buddy'    },
     { screen: 'insights',    emoji: '◈',  label: 'Insights' },
   ];
