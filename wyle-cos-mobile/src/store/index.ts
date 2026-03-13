@@ -33,6 +33,10 @@ interface AppState {
   addObligations: (obs: UIObligation[]) => void;
   resolveObligation: (id: string) => void;
 
+  // Brief — morning/evening
+  lastBriefKey: string | null;
+  setLastBriefKey: (key: string) => void;
+
   // Insights
   insights: InsightsData | null;
   setInsights: (data: InsightsData) => void;
@@ -53,6 +57,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   obligations: INITIAL_OBLIGATIONS,
   insights: null,
   morningBrief: null,
+  lastBriefKey: null,
   isLoading: false,
 
   setAuth: async (token, user) => {
@@ -98,5 +103,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setInsights: (insights) => set({ insights }),
   setMorningBrief: (morningBrief) => set({ morningBrief }),
+  setLastBriefKey: (lastBriefKey) => set({ lastBriefKey }),
   setLoading: (isLoading) => set({ isLoading }),
 }));

@@ -191,9 +191,9 @@ export type RootStackParamList = {
 export type MainTabParamList = {
   Home: undefined;
   Obligations: undefined;
-  Food: undefined;
   Buddy: undefined;
   Insights: undefined;
+  MorningBrief: undefined;
 };
 
 export type OnboardingStackParamList = {

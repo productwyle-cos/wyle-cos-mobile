@@ -4,10 +4,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
-  TouchableOpacity, Dimensions, Animated, StatusBar,
+  TouchableOpacity, Dimensions, Animated, StatusBar, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NavProp } from '../../../app/index';
+import { useAppStore } from '../../store';
+import { generateBrief, getBriefKey, getBriefTimeOfDay, isBriefStale } from '../../services/briefService';
 
 const { width } = Dimensions.get('window');
 
@@ -125,9 +127,16 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
   // Safe navigation — won't crash if null
   const nav = navigation ?? { navigate: (_: any) => {}, goBack: () => {} };
 
+  const obligations    = useAppStore(s => s.obligations);
+  const morningBrief   = useAppStore(s => s.morningBrief);
+  const setMorningBrief= useAppStore(s => s.setMorningBrief);
+  const lastBriefKey   = useAppStore(s => s.lastBriefKey);
+  const setLastBriefKey= useAppStore(s => s.setLastBriefKey);
+
   const fadeIn    = useRef(new Animated.Value(0)).current;
   const slideUp   = useRef(new Animated.Value(24)).current;
-  const [greeting, setGreeting] = useState('Good morning');
+  const [greeting, setGreeting]       = useState('Good morning');
+  const [briefLoading, setBriefLoading] = useState(false);
 
   useEffect(() => {
     const h = new Date().getHours();
@@ -136,8 +145,21 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       Animated.timing(fadeIn,  { toValue: 1, duration: 500, useNativeDriver: true }),
       Animated.spring(slideUp, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true }),
     ]).start();
+
+    // Auto-generate brief once per morning/evening period
+    if (isBriefStale(lastBriefKey)) {
+      setBriefLoading(true);
+      generateBrief(obligations, MOCK_LOS)
+        .then(brief => {
+          setMorningBrief(brief);
+          setLastBriefKey(getBriefKey());
+        })
+        .catch(() => {/* keep existing brief on error */})
+        .finally(() => setBriefLoading(false));
+    }
   }, []);
 
+  const isEvening = getBriefTimeOfDay() === 'evening';
   const highCount = MOCK_ALERTS.filter(a => a.risk === 'high').length;
 
   return (
@@ -182,14 +204,29 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
           </View>
         </Animated.View>
 
-        {/* ── Morning brief ───────────────────────────────────────────────── */}
+        {/* ── Morning / Evening Brief ─────────────────────────────────────── */}
         <Animated.View style={{ opacity: fadeIn }}>
-          <TouchableOpacity style={styles.brief}>
+          <TouchableOpacity
+            style={styles.brief}
+            onPress={() => nav.navigate('morningBrief')}
+            activeOpacity={0.8}
+          >
             <View style={{ flex: 1 }}>
-              <Text style={styles.briefLabel}>MORNING BRIEF</Text>
-              <Text style={styles.briefText}>
-                {highCount} urgent item{highCount !== 1 ? 's' : ''} need your attention. Visa renewal is most urgent.
+              <Text style={styles.briefLabel}>
+                {isEvening ? '🌙 EVENING RECAP' : '☀️ MORNING BRIEF'}
               </Text>
+              {briefLoading ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                  <ActivityIndicator color={C.verdigris} size="small" />
+                  <Text style={[styles.briefText, { color: C.textTer }]}>Buddy is preparing your brief…</Text>
+                </View>
+              ) : morningBrief ? (
+                <Text style={styles.briefText} numberOfLines={2}>{morningBrief.headline}</Text>
+              ) : (
+                <Text style={styles.briefText}>
+                  {highCount} urgent item{highCount !== 1 ? 's' : ''} need your attention.
+                </Text>
+              )}
             </View>
             <Text style={{ color: C.verdigris, fontSize: 26 }}>›</Text>
           </TouchableOpacity>

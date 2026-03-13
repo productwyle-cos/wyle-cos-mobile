@@ -6,15 +6,22 @@ import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import SplashScreen      from '../src/screens/Onboarding/SplashScreen';
-import LoginScreen       from '../src/screens/Onboarding/LoginScreen';
-import HomeScreen        from '../src/screens/Home/HomeScreen';
-import ObligationsScreen from '../src/screens/Obligations/ObligationsScreen';
-import FoodScreen        from '../src/screens/Food/FoodScreen';
-import BuddyScreen       from '../src/screens/Buddy/BuddyScreen';
-import InsightsScreen    from '../src/screens/Insights/InsightsScreen';
+import SplashScreen        from '../src/screens/Onboarding/SplashScreen';
+import LoginScreen         from '../src/screens/Onboarding/LoginScreen';
+import HomeScreen          from '../src/screens/Home/HomeScreen';
+import ObligationsScreen   from '../src/screens/Obligations/ObligationsScreen';
+import BuddyScreen         from '../src/screens/Buddy/BuddyScreen';
+import InsightsScreen      from '../src/screens/Insights/InsightsScreen';
+import MorningBriefScreen  from '../src/screens/Brief/MorningBriefScreen';
 
-export type ScreenName = 'splash' | 'login' | 'home' | 'obligations' | 'food' | 'buddy' | 'insights';
+export type ScreenName =
+  | 'splash'
+  | 'login'
+  | 'home'
+  | 'obligations'
+  | 'buddy'
+  | 'insights'
+  | 'morningBrief';
 
 export type NavProp = {
   navigate: (screen: ScreenName) => void;
@@ -49,14 +56,14 @@ export default function AppEntry() {
   }
 
   switch (screen) {
-    case 'splash':      return <SplashScreen      navigation={navigation} />;
-    case 'login':       return <LoginScreen        navigation={navigation} />;
-    case 'home':        return <HomeScreen         navigation={navigation} />;
-    case 'obligations': return <ObligationsScreen  navigation={navigation} />;
-    case 'food':        return <FoodScreen         navigation={navigation} />;
-    case 'buddy':       return <BuddyScreen        navigation={navigation} />;
-    case 'insights':    return <InsightsScreen     navigation={navigation} />;
-    default:            return <SplashScreen       navigation={navigation} />;
+    case 'splash':       return <SplashScreen       navigation={navigation} />;
+    case 'login':        return <LoginScreen         navigation={navigation} />;
+    case 'home':         return <HomeScreen          navigation={navigation} />;
+    case 'obligations':  return <ObligationsScreen   navigation={navigation} />;
+    case 'buddy':        return <BuddyScreen         navigation={navigation} />;
+    case 'insights':     return <InsightsScreen      navigation={navigation} />;
+    case 'morningBrief': return <MorningBriefScreen  navigation={navigation} />;
+    default:             return <SplashScreen        navigation={navigation} />;
   }
 }
 
