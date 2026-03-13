@@ -250,16 +250,46 @@ function AddModal({ visible, onClose, onAdd }: any) {
   );
 }
 
+// ── Duplicate Detection Helpers ────────────────────────────────────────────────
+function normalizeTitle(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+}
+function isSimilarTitle(a: string, b: string): boolean {
+  const na = normalizeTitle(a);
+  const nb = normalizeTitle(b);
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = na.split(/\s+/).filter(w => w.length > 2);
+  const wb = new Set(nb.split(/\s+/).filter(w => w.length > 2));
+  const shared = wa.filter(w => wb.has(w));
+  return wa.length > 0 && shared.length / Math.max(wa.length, wb.size) > 0.4;
+}
+function findDuplicateObligation(item: UIObligation, existing: UIObligation[]): UIObligation | null {
+  return existing.find(e =>
+    e.status === 'active' &&
+    e.type === item.type &&
+    isSimilarTitle(e.title, item.title)
+  ) ?? null;
+}
+
 // ── Brain Dump Modal (inline — no navigation needed) ──────────────────────────
-function BrainDumpModal({ visible, onClose, onSave }: { visible: boolean; onClose: () => void; onSave: (items: UIObligation[]) => void }) {
+function BrainDumpModal({ visible, onClose, onSave, existingObligations }: {
+  visible: boolean;
+  onClose: () => void;
+  onSave: (items: UIObligation[]) => void;
+  existingObligations: UIObligation[];
+}) {
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [transcript, setTranscript] = useState('');
   const [parsed, setParsed]         = useState<UIObligation[]>([]);
+  const [showReview, setShowReview] = useState(false);
+  const [freshItems, setFreshItems] = useState<UIObligation[]>([]);
+  const [dupeItems, setDupeItems]   = useState<{ incoming: UIObligation; existing: UIObligation }[]>([]);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   // Reset when modal opens
   useEffect(() => {
-    if (visible) { setVoiceState('idle'); setTranscript(''); setParsed([]); }
+    if (visible) { setVoiceState('idle'); setTranscript(''); setParsed([]); setShowReview(false); setFreshItems([]); setDupeItems([]); }
   }, [visible]);
 
   // Pulse animation while recording
@@ -327,8 +357,36 @@ function BrainDumpModal({ visible, onClose, onSave }: { visible: boolean; onClos
   };
 
   const handleSaveAll = () => {
+    const fresh: UIObligation[] = [];
+    const dupes: { incoming: UIObligation; existing: UIObligation }[] = [];
+    for (const item of parsed) {
+      const match = findDuplicateObligation(item, existingObligations);
+      if (match) dupes.push({ incoming: item, existing: match });
+      else fresh.push(item);
+    }
+    if (dupes.length > 0) {
+      setFreshItems(fresh);
+      setDupeItems(dupes);
+      setShowReview(true);
+      return;
+    }
     onSave(parsed);
     Speech.speak(`${parsed.length} ${parsed.length === 1 ? 'task' : 'tasks'} added.`, { language: 'en-US', rate: 0.95 });
+    onClose();
+  };
+
+  const handleSkipDupes = () => {
+    if (freshItems.length > 0) {
+      onSave(freshItems);
+      Speech.speak(`${freshItems.length} new ${freshItems.length === 1 ? 'task' : 'tasks'} added.`, { language: 'en-US', rate: 0.95 });
+    }
+    onClose();
+  };
+
+  const handleAddAll = () => {
+    const allItems = [...freshItems, ...dupeItems.map(d => d.incoming)];
+    onSave(allItems);
+    Speech.speak(`${allItems.length} ${allItems.length === 1 ? 'task' : 'tasks'} added.`, { language: 'en-US', rate: 0.95 });
     onClose();
   };
 
@@ -431,19 +489,61 @@ function BrainDumpModal({ visible, onClose, onSave }: { visible: boolean; onClos
             </View>
           )}
 
+          {/* Duplicate review step */}
+          {showReview && (
+            <View>
+              <Text style={bd.resultsLabel}>POSSIBLE DUPLICATES ({dupeItems.length})</Text>
+              <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
+                {dupeItems.map(({ incoming, existing }) => {
+                  const rc = RISK_COLORS[existing.risk as Risk];
+                  return (
+                    <View key={incoming._id} style={bd.dupeCard}>
+                      <View style={bd.dupeRow}>
+                        <View style={bd.dupeLabelPill}><Text style={bd.dupeLabelText}>EXISTS</Text></View>
+                        <Text style={bd.dupeName}>{existing.emoji} {existing.title}</Text>
+                        <Text style={[bd.parsedDays, { color: rc }]}>{getDaysLabel(existing.daysUntil)}</Text>
+                      </View>
+                      <View style={[bd.dupeRow, { opacity: 0.55 }]}>
+                        <View style={[bd.dupeLabelPill, { backgroundColor: `${C.salmon}20` }]}><Text style={[bd.dupeLabelText, { color: C.salmon }]}>NEW</Text></View>
+                        <Text style={bd.dupeName}>{incoming.emoji} {incoming.title}</Text>
+                        <Text style={bd.parsedDays}>{getDaysLabel(incoming.daysUntil)}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+              <Text style={[bd.statusText, { color: C.textSec, marginTop: 8 }]}>
+                {freshItems.length > 0 ? `${freshItems.length} new` : 'No new tasks'} · {dupeItems.length} already exist{dupeItems.length !== 1 ? '' : 's'}
+              </Text>
+              <View style={{ gap: 10, marginTop: 4 }}>
+                <TouchableOpacity style={bd.saveBtn} onPress={handleSkipDupes}>
+                  <Text style={bd.saveBtnText}>
+                    {freshItems.length > 0 ? `Add ${freshItems.length} new, skip duplicates` : 'Skip — already in list'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[bd.saveBtn, { backgroundColor: `${C.chartreuse}18`, borderWidth: 1, borderColor: `${C.chartreuse}40` }]} onPress={handleAddAll}>
+                  <Text style={[bd.saveBtnText, { color: C.chartreuse }]}>Add all anyway</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={bd.retryBtn} onPress={() => setShowReview(false)}>
+                  <Text style={bd.retryBtnText}>Back</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
           {/* Save / Retry buttons */}
-          {voiceState === 'done' && parsed.length > 0 && (
+          {!showReview && voiceState === 'done' && parsed.length > 0 && (
             <View style={{ gap: 10, marginTop: 8 }}>
               <TouchableOpacity style={bd.saveBtn} onPress={handleSaveAll}>
                 <Text style={bd.saveBtnText}>Add {parsed.length} {parsed.length === 1 ? 'task' : 'tasks'} to Obligations</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={bd.retryBtn} onPress={() => { setParsed([]); setTranscript(''); setVoiceState('idle'); }}>
+              <TouchableOpacity style={bd.retryBtn} onPress={() => { setParsed([]); setTranscript(''); setVoiceState('idle'); setShowReview(false); setFreshItems([]); setDupeItems([]); }}>
                 <Text style={bd.retryBtnText}>Discard & try again</Text>
               </TouchableOpacity>
             </View>
           )}
 
-          {voiceState === 'done' && parsed.length === 0 && (
+          {!showReview && voiceState === 'done' && parsed.length === 0 && (
             <TouchableOpacity style={bd.retryBtn} onPress={() => setVoiceState('idle')}>
               <Text style={bd.retryBtnText}>Nothing found — try again</Text>
             </TouchableOpacity>
@@ -567,7 +667,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
 
       <DetailModal item={selected} visible={detailVisible} onClose={() => setDetail(false)} onResolve={(it: any) => resolveObligation(it._id)} />
       <AddModal visible={addVisible} onClose={() => setAdd(false)} onAdd={(item: any) => addObligation(item)} />
-      <BrainDumpModal visible={dumpVisible} onClose={() => setDump(false)} onSave={(items) => addObligations(items)} />
+      <BrainDumpModal visible={dumpVisible} onClose={() => setDump(false)} onSave={(items) => addObligations(items)} existingObligations={active} />
     </View>
   );
 }
@@ -690,4 +790,9 @@ const bd = StyleSheet.create({
   saveBtnText:    { color: C.bg, fontSize: 15, fontWeight: '700' },
   retryBtn:       { alignItems: 'center', paddingVertical: 10 },
   retryBtnText:   { color: C.textTer, fontSize: 13 },
+  dupeCard:       { backgroundColor: C.surfaceEl, borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: C.border, gap: 6 },
+  dupeRow:        { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dupeLabelPill:  { backgroundColor: `${C.verdigris}20`, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
+  dupeLabelText:  { color: C.verdigris, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 },
+  dupeName:       { flex: 1, color: C.white, fontSize: 12, fontWeight: '600' },
 });
