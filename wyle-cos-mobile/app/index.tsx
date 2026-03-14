@@ -13,6 +13,7 @@ import ObligationsScreen   from '../src/screens/Obligations/ObligationsScreen';
 import BuddyScreen         from '../src/screens/Buddy/BuddyScreen';
 import InsightsScreen      from '../src/screens/Insights/InsightsScreen';
 import MorningBriefScreen  from '../src/screens/Brief/MorningBriefScreen';
+import ConnectScreen       from '../src/screens/Connect/ConnectScreen';
 
 export type ScreenName =
   | 'splash'
@@ -21,7 +22,8 @@ export type ScreenName =
   | 'obligations'
   | 'buddy'
   | 'insights'
-  | 'morningBrief';
+  | 'morningBrief'
+  | 'connect';
 
 export type NavProp = {
   navigate: (screen: ScreenName) => void;
@@ -63,6 +65,7 @@ export default function AppEntry() {
     case 'buddy':        return <BuddyScreen         navigation={navigation} />;
     case 'insights':     return <InsightsScreen      navigation={navigation} />;
     case 'morningBrief': return <MorningBriefScreen  navigation={navigation} />;
+    case 'connect':      return <ConnectScreen       navigation={navigation} />;
     default:             return <SplashScreen        navigation={navigation} />;
   }
 }

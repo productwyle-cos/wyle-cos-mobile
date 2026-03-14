@@ -37,6 +37,12 @@ interface AppState {
   lastBriefKey: string | null;
   setLastBriefKey: (key: string) => void;
 
+  // Google / Life Signal Engine
+  googleConnected: boolean;
+  googleEmail: string;
+  setGoogleConnected: (connected: boolean) => void;
+  setGoogleEmail: (email: string) => void;
+
   // Insights
   insights: InsightsData | null;
   setInsights: (data: InsightsData) => void;
@@ -58,6 +64,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   insights: null,
   morningBrief: null,
   lastBriefKey: null,
+  googleConnected: false,
+  googleEmail: '',
   isLoading: false,
 
   setAuth: async (token, user) => {
@@ -104,5 +112,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setInsights: (insights) => set({ insights }),
   setMorningBrief: (morningBrief) => set({ morningBrief }),
   setLastBriefKey: (lastBriefKey) => set({ lastBriefKey }),
+  setGoogleConnected: (googleConnected) => set({ googleConnected }),
+  setGoogleEmail: (googleEmail) => set({ googleEmail }),
   setLoading: (isLoading) => set({ isLoading }),
 }));

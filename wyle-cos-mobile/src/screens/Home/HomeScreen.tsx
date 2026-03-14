@@ -127,11 +127,12 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
   // Safe navigation — won't crash if null
   const nav = navigation ?? { navigate: (_: any) => {}, goBack: () => {} };
 
-  const obligations    = useAppStore(s => s.obligations);
-  const morningBrief   = useAppStore(s => s.morningBrief);
-  const setMorningBrief= useAppStore(s => s.setMorningBrief);
-  const lastBriefKey   = useAppStore(s => s.lastBriefKey);
-  const setLastBriefKey= useAppStore(s => s.setLastBriefKey);
+  const obligations       = useAppStore(s => s.obligations);
+  const morningBrief      = useAppStore(s => s.morningBrief);
+  const setMorningBrief   = useAppStore(s => s.setMorningBrief);
+  const lastBriefKey      = useAppStore(s => s.lastBriefKey);
+  const setLastBriefKey   = useAppStore(s => s.setLastBriefKey);
+  const googleConnected   = useAppStore(s => s.googleConnected);
 
   const fadeIn    = useRef(new Animated.Value(0)).current;
   const slideUp   = useRef(new Animated.Value(24)).current;
@@ -203,6 +204,24 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
             ))}
           </View>
         </Animated.View>
+
+        {/* ── Life Signal Engine banner (show if not connected) ──────────── */}
+        {!googleConnected && (
+          <Animated.View style={{ opacity: fadeIn }}>
+            <TouchableOpacity
+              style={styles.signalBanner}
+              onPress={() => nav.navigate('connect')}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.signalEmoji}>⚡</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.signalTitle}>Connect Gmail & Calendar</Text>
+                <Text style={styles.signalSub}>Let Buddy auto-detect obligations from your inbox</Text>
+              </View>
+              <Text style={{ color: C.chartreuse, fontSize: 20 }}>›</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        )}
 
         {/* ── Morning / Evening Brief ─────────────────────────────────────── */}
         <Animated.View style={{ opacity: fadeIn }}>
@@ -286,8 +305,12 @@ const styles = StyleSheet.create({
   statValue:{ fontSize: 13, fontWeight: '700' },
 
   brief: { backgroundColor: `${C.verdigris}12`, borderWidth: 1, borderColor: `${C.verdigris}28`, marginHorizontal: 16, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 22 },
-  briefLabel: { color: C.verdigris, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 4 },
-  briefText:  { color: C.textSec, fontSize: 13, lineHeight: 18 },
+  briefLabel:    { color: C.verdigris, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 4 },
+  briefText:     { color: C.textSec, fontSize: 13, lineHeight: 18 },
+  signalBanner:  { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: `${C.chartreuse}12`, borderRadius: 14, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: `${C.chartreuse}30` },
+  signalEmoji:   { fontSize: 22 },
+  signalTitle:   { color: C.chartreuse, fontSize: 13, fontWeight: '700', marginBottom: 2 },
+  signalSub:     { color: C.textSec, fontSize: 11 },
 
   section:      { paddingHorizontal: 16, marginBottom: 22 },
   sectionHeader:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
