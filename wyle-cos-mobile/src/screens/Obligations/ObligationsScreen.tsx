@@ -271,24 +271,44 @@ function findDuplicateObligation(item: UIObligation, existing: UIObligation[]): 
   ) ?? null;
 }
 
+// ── Completion Intent Helpers ───────────────────────────────────────────────────
+function hasCompletionIntent(text: string): boolean {
+  const lower = text.toLowerCase();
+  return ['i paid', 'i have paid', 'i completed', 'i have completed', 'i finished',
+    'already paid', 'already done', 'already completed', 'mark as completed',
+    'mark as done', 'mark it as completed', 'can you remove', 'remove the task',
+    'remove it from', 'mark it completed'].some(p => lower.includes(p));
+}
+function findObligationInText(text: string, obligations: UIObligation[]): UIObligation | null {
+  const lowerText = normalizeTitle(text);
+  return obligations.find(ob => {
+    const titleWords = normalizeTitle(ob.title).split(/\s+/).filter(w => w.length > 3);
+    if (titleWords.length === 0) return false;
+    const matched = titleWords.filter(w => lowerText.includes(w));
+    return matched.length / titleWords.length >= 0.5;
+  }) ?? null;
+}
+
 // ── Brain Dump Modal (inline — no navigation needed) ──────────────────────────
-function BrainDumpModal({ visible, onClose, onSave, existingObligations }: {
+function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResolve }: {
   visible: boolean;
   onClose: () => void;
   onSave: (items: UIObligation[]) => void;
   existingObligations: UIObligation[];
+  onResolve: (id: string) => void;
 }) {
-  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
-  const [transcript, setTranscript] = useState('');
-  const [parsed, setParsed]         = useState<UIObligation[]>([]);
-  const [showReview, setShowReview] = useState(false);
-  const [freshItems, setFreshItems] = useState<UIObligation[]>([]);
-  const [dupeItems, setDupeItems]   = useState<{ incoming: UIObligation; existing: UIObligation }[]>([]);
+  const [voiceState, setVoiceState]         = useState<VoiceState>('idle');
+  const [transcript, setTranscript]         = useState('');
+  const [parsed, setParsed]                 = useState<UIObligation[]>([]);
+  const [showReview, setShowReview]         = useState(false);
+  const [freshItems, setFreshItems]         = useState<UIObligation[]>([]);
+  const [dupeItems, setDupeItems]           = useState<{ incoming: UIObligation; existing: UIObligation }[]>([]);
+  const [completionTarget, setCompletionTarget] = useState<UIObligation | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   // Reset when modal opens
   useEffect(() => {
-    if (visible) { setVoiceState('idle'); setTranscript(''); setParsed([]); setShowReview(false); setFreshItems([]); setDupeItems([]); }
+    if (visible) { setVoiceState('idle'); setTranscript(''); setParsed([]); setShowReview(false); setFreshItems([]); setDupeItems([]); setCompletionTarget(null); }
   }, [visible]);
 
   // Pulse animation while recording
@@ -342,13 +362,36 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations }: {
   const handleMicPress = () => {
     if (voiceState === 'recording') {
       VoiceService.stop(
-        (text) => { setTranscript(text); parseWithClaude(text); },
+        (text) => {
+          setTranscript(text);
+          // ── Check for completion intent before sending to Claude ────────
+          if (hasCompletionIntent(text)) {
+            const match = findObligationInText(text, existingObligations);
+            if (match) {
+              setCompletionTarget(match);
+              setVoiceState('done');
+              return;
+            }
+          }
+          parseWithClaude(text);
+        },
         (state) => { if (state === 'idle') setVoiceState('transcribing'); }
       );
     } else if (voiceState === 'idle') {
-      setParsed([]); setTranscript('');
+      setParsed([]); setTranscript(''); setCompletionTarget(null);
       VoiceService.start(
-        (text) => { setTranscript(text); parseWithClaude(text); },
+        (text) => {
+          setTranscript(text);
+          if (hasCompletionIntent(text)) {
+            const match = findObligationInText(text, existingObligations);
+            if (match) {
+              setCompletionTarget(match);
+              setVoiceState('done');
+              return;
+            }
+          }
+          parseWithClaude(text);
+        },
         (state) => { if (state === 'recording') setVoiceState('recording'); }
       );
       setVoiceState('recording');
@@ -420,8 +463,41 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations }: {
             </View>
           )}
 
+          {/* Completion intent detected */}
+          {completionTarget && (
+            <View>
+              <Text style={bd.resultsLabel}>MARK AS COMPLETED?</Text>
+              <View style={[bd.parsedCard, { borderLeftColor: RISK_COLORS[completionTarget.risk as Risk] }]}>
+                <Text style={bd.parsedEmoji}>{completionTarget.emoji}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={bd.parsedTitle}>{completionTarget.title}</Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 3 }}>
+                    <Text style={[bd.parsedRisk, { color: RISK_COLORS[completionTarget.risk as Risk] }]}>{completionTarget.risk.toUpperCase()}</Text>
+                    <Text style={bd.parsedDays}>{getDaysLabel(completionTarget.daysUntil)}</Text>
+                    {completionTarget.amount && <Text style={bd.parsedAmount}>AED {completionTarget.amount.toLocaleString()}</Text>}
+                  </View>
+                </View>
+              </View>
+              <View style={{ gap: 10, marginTop: 8 }}>
+                <TouchableOpacity style={bd.saveBtn} onPress={() => {
+                  onResolve(completionTarget._id);
+                  Speech.speak(`${completionTarget.title} marked as completed.`, { language: 'en-US', rate: 0.95 });
+                  onClose();
+                }}>
+                  <Text style={bd.saveBtnText}>✓ Yes, mark as completed</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[bd.saveBtn, { backgroundColor: C.surface }]} onPress={() => {
+                  setCompletionTarget(null);
+                  parseWithClaude(transcript);
+                }}>
+                  <Text style={[bd.saveBtnText, { color: C.textSec }]}>Add as new task instead</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
           {/* Parsed results */}
-          {parsed.length > 0 && (
+          {!completionTarget && parsed.length > 0 && (
             <ScrollView style={{ maxHeight: 220 }} showsVerticalScrollIndicator={false}>
               <Text style={bd.resultsLabel}>BUDDY FOUND {parsed.length} {parsed.length === 1 ? 'TASK' : 'TASKS'}</Text>
               {parsed.map(item => {
@@ -463,7 +539,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations }: {
              voiceState === 'recording'    ? '🔴 Listening... tap to stop' :
              voiceState === 'transcribing' ? '⏳ Processing voice...' :
              voiceState === 'parsing'      ? '🤖 Buddy is structuring tasks...' :
-             voiceState === 'done'         ? `✓ ${parsed.length} tasks found — save them below` :
+             voiceState === 'done'         ? (completionTarget ? `✓ Found matching task — confirm below` : `✓ ${parsed.length} tasks found — save them below`) :
              voiceState === 'error'        ? 'Could not process. Try again.' : ''}
           </Text>
 
@@ -666,7 +742,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
 
       <DetailModal item={selected} visible={detailVisible} onClose={() => setDetail(false)} onResolve={(it: any) => resolveObligation(it._id)} />
       <AddModal visible={addVisible} onClose={() => setAdd(false)} onAdd={(item: any) => addObligation(item)} />
-      <BrainDumpModal visible={dumpVisible} onClose={() => setDump(false)} onSave={(items) => addObligations(items)} existingObligations={active} />
+      <BrainDumpModal visible={dumpVisible} onClose={() => setDump(false)} onSave={(items) => addObligations(items)} existingObligations={active} onResolve={(id) => resolveObligation(id)} />
     </View>
   );
 }
