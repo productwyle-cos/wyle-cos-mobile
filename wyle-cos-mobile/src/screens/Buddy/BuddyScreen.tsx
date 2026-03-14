@@ -37,12 +37,18 @@ const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
 function buildSystemPrompt(obligations: UIObligation[]): string {
-  const active = obligations.filter(o => o.status === 'active');
-  const obsList = active.length > 0
+  const active    = obligations.filter(o => o.status === 'active');
+  const completed = obligations.filter(o => o.status === 'completed');
+
+  const activeList = active.length > 0
     ? active.map(o =>
         `  * [ID:${o._id}] ${o.emoji} ${o.title} — ${o.daysUntil === 0 ? 'due TODAY' : `${o.daysUntil} days`} (${o.risk.toUpperCase()} RISK)${o.amount ? ` — AED ${o.amount.toLocaleString()}` : ''}`
       ).join('\n')
     : '  * No active obligations';
+
+  const completedList = completed.length > 0
+    ? completed.map(o => `  * ✅ ${o.emoji} ${o.title}`).join('\n')
+    : '';
 
   return `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
 
@@ -57,13 +63,14 @@ The user's current life context:
 - Life Optimization Score (LOS): 74/100
 - Location: Dubai, UAE
 - Active obligations (${active.length}):
-${obsList}
+${activeList}${completedList ? `\n- Already completed:\n${completedList}` : ''}
 - Time saved this week: 4h 20m
 - Decisions handled: 12
 
 Rules:
 - Always show a certainty score (e.g. "95% confident") before suggesting an action
-- When the user says they have paid, completed, done, or resolved an obligation, use the resolve_obligation tool immediately — do NOT ask for further confirmation, they already confirmed by saying it.
+- When the user says they have paid, completed, done, or resolved an obligation, check the "Already completed" list first. If it is already there, tell the user it was already marked done — do NOT call the resolve_obligation tool again.
+- Only call resolve_obligation for obligations that are currently in the Active obligations list.
 - Respond in English unless user writes in Arabic, then respond in Arabic`;
 }
 
@@ -262,6 +269,7 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
   const [showQuick, setShowQuick] = useState(true);
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [pendingResolve, setPendingResolve] = useState<{ id: string; title: string } | null>(null);
 
   const recordingRef = useRef<Audio.Recording | null>(null);
   const listRef      = useRef<FlatList>(null);
@@ -269,9 +277,38 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
   const scrollToEnd = () =>
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
 
+  // ── Confirm / cancel a pending resolve ─────────────────────────────────────
+  const handleConfirmResolve = () => {
+    if (!pendingResolve) return;
+    resolveObligation(pendingResolve.id);
+    const msg = `✅ Done! "${pendingResolve.title}" is marked as completed and removed from your active list.`;
+    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'buddy', text: msg, timestamp: new Date() }]);
+    speakText(`Done! ${pendingResolve.title} has been marked as completed.`);
+    setPendingResolve(null);
+    scrollToEnd();
+  };
+
+  const handleCancelResolve = () => {
+    if (!pendingResolve) return;
+    const msg = `No problem! "${pendingResolve.title}" stays in your active list.`;
+    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'buddy', text: msg, timestamp: new Date() }]);
+    setPendingResolve(null);
+    scrollToEnd();
+  };
+
   // ── Claude API call ─────────────────────────────────────────────────────────
   const sendMessage = async (text: string, speakResponse = false) => {
     if (!text.trim() || loading) return;
+
+    // ── If a resolve is awaiting confirmation, handle yes/no via voice/text ──
+    if (pendingResolve) {
+      const lower = text.trim().toLowerCase();
+      const isYes = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'confirm', 'do it', 'go ahead', 'remove it', 'mark it'].some(w => lower.includes(w));
+      const isNo  = ['no', 'nope', 'cancel', 'keep', "don't", 'stop'].some(w => lower.includes(w));
+      if (isYes) { setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]); handleConfirmResolve(); return; }
+      if (isNo)  { setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]); handleCancelResolve();  return; }
+    }
+
     setShowQuick(false);
     setInput('');
 
@@ -304,17 +341,17 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || 'API error');
 
-      // ── Handle tool use: Buddy wants to resolve an obligation ──────────────
+      // ── Handle tool use: Buddy wants to resolve — ask user first ──────────
       if (data.stop_reason === 'tool_use') {
         const toolUse = data.content?.find((c: any) => c.type === 'tool_use');
         if (toolUse?.name === 'resolve_obligation') {
           const { obligation_id, obligation_title } = toolUse.input;
-          resolveObligation(obligation_id);
-          const confirmText = `✅ Done! "${obligation_title}" is marked as completed and removed from your active list.`;
+          setPendingResolve({ id: obligation_id, title: obligation_title });
+          const askText = `Should I mark "${obligation_title}" as completed and remove it from your active list?`;
           setMessages(prev => [...prev, {
-            id: (Date.now() + 1).toString(), role: 'buddy', text: confirmText, timestamp: new Date(),
+            id: (Date.now() + 1).toString(), role: 'buddy', text: askText, timestamp: new Date(),
           }]);
-          if (speakResponse) speakText(`Done! ${obligation_title} has been marked as completed.`);
+          if (speakResponse) speakText(`Should I mark ${obligation_title} as completed and remove it from your list?`);
           return;
         }
       }
@@ -512,6 +549,18 @@ const handleVoicePress = () => {
           </View>
         )}
 
+        {/* ── Confirmation bar — appears when Buddy asks to resolve ── */}
+        {pendingResolve && (
+          <View style={s.confirmBar}>
+            <TouchableOpacity style={s.confirmYes} onPress={handleConfirmResolve}>
+              <Text style={s.confirmYesText}>✓ Yes, mark as done</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.confirmNo} onPress={handleCancelResolve}>
+              <Text style={s.confirmNoText}>Keep it</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={s.inputBar}>
           <TextInput
             style={s.input}
@@ -568,4 +617,10 @@ const s = StyleSheet.create({
   input:       { flex: 1, backgroundColor: C.surface, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, color: C.white, fontSize: 15, maxHeight: 100, borderWidth: 1, borderColor: C.border },
   sendBtn:     { width: 42, height: 42, borderRadius: 21, backgroundColor: C.chartreuse, alignItems: 'center', justifyContent: 'center' },
   sendIcon:    { color: C.bg, fontSize: 22, fontWeight: '700', lineHeight: 26 },
+
+  confirmBar:    { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderColor: `${C.verdigris}30`, backgroundColor: `${C.verdigris}08` },
+  confirmYes:    { flex: 1, backgroundColor: C.verdigris, borderRadius: 999, paddingVertical: 12, alignItems: 'center' },
+  confirmYesText:{ color: C.white, fontSize: 14, fontWeight: '700' },
+  confirmNo:     { flex: 1, backgroundColor: C.surface, borderRadius: 999, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: C.border },
+  confirmNoText: { color: C.textSec, fontSize: 14, fontWeight: '600' },
 });
