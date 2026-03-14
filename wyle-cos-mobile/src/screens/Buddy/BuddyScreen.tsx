@@ -12,6 +12,8 @@ import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
+import { useAppStore } from '../../store';
+import { UIObligation } from '../../types';
 
 const { width } = Dimensions.get('window');
 
@@ -34,7 +36,15 @@ const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 // You can use the same key structure: EXPO_PUBLIC_OPENAI_API_KEY=sk-...
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
-const SYSTEM_PROMPT = `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
+function buildSystemPrompt(obligations: UIObligation[]): string {
+  const active = obligations.filter(o => o.status === 'active');
+  const obsList = active.length > 0
+    ? active.map(o =>
+        `  * [ID:${o._id}] ${o.emoji} ${o.title} — ${o.daysUntil === 0 ? 'due TODAY' : `${o.daysUntil} days`} (${o.risk.toUpperCase()} RISK)${o.amount ? ` — AED ${o.amount.toLocaleString()}` : ''}`
+      ).join('\n')
+    : '  * No active obligations';
+
+  return `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
 
 Your personality:
 - Calm, confident, warm, direct. You speak like a trusted friend who is highly competent.
@@ -46,21 +56,29 @@ Your personality:
 The user's current life context:
 - Life Optimization Score (LOS): 74/100
 - Location: Dubai, UAE
-- Urgent obligations:
-  * UAE Residence Visa — expires in 8 days (HIGH RISK) — renew via GDRFA website
-  * School Fee Q3 — AED 14,000 — due TODAY (HIGH RISK)
-  * Emirates ID Renewal — 22 days — AED 370 (MEDIUM) — ICA smart app
-  * Car Registration — 31 days — AED 450 (MEDIUM) — needs insurance first
-  * Car Insurance — 45 days — AED 2,100 (LOW) — AXA UAE app
-  * DEWA Bill — 12 days — AED 850 (LOW)
+- Active obligations (${active.length}):
+${obsList}
 - Time saved this week: 4h 20m
 - Decisions handled: 12
 
 Rules:
 - Always show a certainty score (e.g. "95% confident") before suggesting an action
-- Never execute anything without user confirmation
-- When ordering food, give exactly 3 options as a numbered list
+- When the user says they have paid, completed, done, or resolved an obligation, use the resolve_obligation tool immediately — do NOT ask for further confirmation, they already confirmed by saying it.
 - Respond in English unless user writes in Arabic, then respond in Arabic`;
+}
+
+const RESOLVE_TOOL = [{
+  name: 'resolve_obligation',
+  description: 'Mark an obligation as completed when the user says they have paid, done, completed, or resolved it.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      obligation_id:    { type: 'string', description: 'The exact ID from the obligations list (e.g. "1", "6")' },
+      obligation_title: { type: 'string', description: 'Human-readable title for the confirmation message' },
+    },
+    required: ['obligation_id', 'obligation_title'],
+  },
+}];
 
 type Role = 'user' | 'buddy';
 type Message = { id: string; role: Role; text: string; timestamp: Date };
@@ -231,6 +249,9 @@ const mic = StyleSheet.create({
 export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
   const nav = navigation ?? { navigate: (_: any) => {}, goBack: () => {} };
 
+  const obligations       = useAppStore(s => s.obligations);
+  const resolveObligation = useAppStore(s => s.resolveObligation);
+
   const [messages, setMessages] = useState<Message[]>([{
     id: '0', role: 'buddy',
     text: "Hey! I'm Buddy — your personal chief of staff. 👋\n\nYou have 2 urgent items today: your UAE visa expires in 8 days and your school fee of AED 14,000 is due today.\n\nTap 🎙️ to talk, or type below.",
@@ -274,7 +295,8 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
           max_tokens: 500,
-          system: SYSTEM_PROMPT,
+          system: buildSystemPrompt(obligations),
+          tools: RESOLVE_TOOL,
           messages: history,
         }),
       });
@@ -282,11 +304,26 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || 'API error');
 
+      // ── Handle tool use: Buddy wants to resolve an obligation ──────────────
+      if (data.stop_reason === 'tool_use') {
+        const toolUse = data.content?.find((c: any) => c.type === 'tool_use');
+        if (toolUse?.name === 'resolve_obligation') {
+          const { obligation_id, obligation_title } = toolUse.input;
+          resolveObligation(obligation_id);
+          const confirmText = `✅ Done! "${obligation_title}" is marked as completed and removed from your active list.`;
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(), role: 'buddy', text: confirmText, timestamp: new Date(),
+          }]);
+          if (speakResponse) speakText(`Done! ${obligation_title} has been marked as completed.`);
+          return;
+        }
+      }
+
+      // ── Normal text response ───────────────────────────────────────────────
       const responseText = data.content?.[0]?.text ?? "Something went wrong. Try again?";
       const buddyMsg: Message = { id: (Date.now() + 1).toString(), role: 'buddy', text: responseText, timestamp: new Date() };
       setMessages(prev => [...prev, buddyMsg]);
 
-      // Speak Buddy's response if triggered by voice
       if (speakResponse) {
         speakText(responseText);
       }
