@@ -37,12 +37,18 @@ const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
 function buildSystemPrompt(obligations: UIObligation[]): string {
-  const active = obligations.filter(o => o.status === 'active');
-  const obsList = active.length > 0
+  const active    = obligations.filter(o => o.status === 'active');
+  const completed = obligations.filter(o => o.status === 'completed');
+
+  const activeList = active.length > 0
     ? active.map(o =>
         `  * [ID:${o._id}] ${o.emoji} ${o.title} — ${o.daysUntil === 0 ? 'due TODAY' : `${o.daysUntil} days`} (${o.risk.toUpperCase()} RISK)${o.amount ? ` — AED ${o.amount.toLocaleString()}` : ''}`
       ).join('\n')
     : '  * No active obligations';
+
+  const completedList = completed.length > 0
+    ? completed.map(o => `  * ✅ ${o.emoji} ${o.title}`).join('\n')
+    : '';
 
   return `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
 
@@ -57,13 +63,14 @@ The user's current life context:
 - Life Optimization Score (LOS): 74/100
 - Location: Dubai, UAE
 - Active obligations (${active.length}):
-${obsList}
+${activeList}${completedList ? `\n- Already completed:\n${completedList}` : ''}
 - Time saved this week: 4h 20m
 - Decisions handled: 12
 
 Rules:
 - Always show a certainty score (e.g. "95% confident") before suggesting an action
-- When the user says they have paid, completed, done, or resolved an obligation, use the resolve_obligation tool immediately — do NOT ask for further confirmation, they already confirmed by saying it.
+- When the user says they have paid, completed, done, or resolved an obligation, check the "Already completed" list first. If it is already there, tell the user it was already marked done — do NOT call the resolve_obligation tool again.
+- Only call resolve_obligation for obligations that are currently in the Active obligations list.
 - Respond in English unless user writes in Arabic, then respond in Arabic`;
 }
 
