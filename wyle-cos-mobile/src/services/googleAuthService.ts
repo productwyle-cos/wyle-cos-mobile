@@ -5,6 +5,7 @@
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -24,6 +25,30 @@ const SECURE_KEYS = {
   TOKEN_EXPIRY:  'google_token_expiry',
   USER_EMAIL:    'google_user_email',
 };
+
+// ── Storage abstraction (SecureStore on native, localStorage on web) ───────────
+async function storeItem(key: string, value: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    localStorage.setItem(key, value);
+  } else {
+    await SecureStore.setItemAsync(key, value);
+  }
+}
+
+async function getItem(key: string): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    return localStorage.getItem(key);
+  }
+  return SecureStore.getItemAsync(key);
+}
+
+async function deleteItem(key: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    localStorage.removeItem(key);
+  } else {
+    await SecureStore.deleteItemAsync(key).catch(() => {});
+  }
+}
 
 export type GoogleAuthResult =
   | { success: true;  accessToken: string; email: string }
@@ -74,18 +99,18 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
     const { accessToken, refreshToken, expiresIn } = tokenRes;
     if (!accessToken) return { success: false, error: 'No access token returned' };
 
-    // Persist tokens securely
-    await SecureStore.setItemAsync(SECURE_KEYS.ACCESS_TOKEN, accessToken);
-    if (refreshToken) await SecureStore.setItemAsync(SECURE_KEYS.REFRESH_TOKEN, refreshToken);
+    // Persist tokens
+    await storeItem(SECURE_KEYS.ACCESS_TOKEN, accessToken);
+    if (refreshToken) await storeItem(SECURE_KEYS.REFRESH_TOKEN, refreshToken);
     const expiry = Date.now() + (expiresIn ?? 3600) * 1000;
-    await SecureStore.setItemAsync(SECURE_KEYS.TOKEN_EXPIRY, expiry.toString());
+    await storeItem(SECURE_KEYS.TOKEN_EXPIRY, expiry.toString());
 
     // Fetch user email
     const userInfo = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${accessToken}` },
     }).then(r => r.json());
     const email = userInfo.email ?? '';
-    await SecureStore.setItemAsync(SECURE_KEYS.USER_EMAIL, email);
+    await storeItem(SECURE_KEYS.USER_EMAIL, email);
 
     return { success: true, accessToken, email };
   } catch (err: any) {
@@ -96,8 +121,8 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
 // ── Get stored access token (refreshes if expired) ────────────────────────────
 export async function getAccessToken(): Promise<string | null> {
   try {
-    const token  = await SecureStore.getItemAsync(SECURE_KEYS.ACCESS_TOKEN);
-    const expiry = await SecureStore.getItemAsync(SECURE_KEYS.TOKEN_EXPIRY);
+    const token  = await getItem(SECURE_KEYS.ACCESS_TOKEN);
+    const expiry = await getItem(SECURE_KEYS.TOKEN_EXPIRY);
 
     if (!token) return null;
 
@@ -105,7 +130,7 @@ export async function getAccessToken(): Promise<string | null> {
     if (expiry && Date.now() < parseInt(expiry) - 60_000) return token;
 
     // Try refresh
-    const refresh = await SecureStore.getItemAsync(SECURE_KEYS.REFRESH_TOKEN);
+    const refresh = await getItem(SECURE_KEYS.REFRESH_TOKEN);
     if (!refresh || !GOOGLE_CLIENT_ID) return null;
 
     const res = await fetch('https://oauth2.googleapis.com/token', {
@@ -120,9 +145,9 @@ export async function getAccessToken(): Promise<string | null> {
     const data = await res.json();
     if (!data.access_token) return null;
 
-    await SecureStore.setItemAsync(SECURE_KEYS.ACCESS_TOKEN, data.access_token);
+    await storeItem(SECURE_KEYS.ACCESS_TOKEN, data.access_token);
     const newExpiry = Date.now() + (data.expires_in ?? 3600) * 1000;
-    await SecureStore.setItemAsync(SECURE_KEYS.TOKEN_EXPIRY, newExpiry.toString());
+    await storeItem(SECURE_KEYS.TOKEN_EXPIRY, newExpiry.toString());
 
     return data.access_token;
   } catch {
@@ -133,15 +158,15 @@ export async function getAccessToken(): Promise<string | null> {
 // ── Check if connected ─────────────────────────────────────────────────────────
 export async function isGoogleConnected(): Promise<{ connected: boolean; email: string }> {
   const token = await getAccessToken();
-  const email = await SecureStore.getItemAsync(SECURE_KEYS.USER_EMAIL) ?? '';
+  const email = (await getItem(SECURE_KEYS.USER_EMAIL)) ?? '';
   return { connected: !!token, email };
 }
 
 // ── Disconnect ─────────────────────────────────────────────────────────────────
 export async function disconnectGoogle(): Promise<void> {
-  const token = await SecureStore.getItemAsync(SECURE_KEYS.ACCESS_TOKEN);
+  const token = await getItem(SECURE_KEYS.ACCESS_TOKEN);
   if (token) {
     fetch(`https://oauth2.googleapis.com/revoke?token=${token}`, { method: 'POST' }).catch(() => {});
   }
-  await Promise.all(Object.values(SECURE_KEYS).map(k => SecureStore.deleteItemAsync(k).catch(() => {})));
+  await Promise.all(Object.values(SECURE_KEYS).map(k => deleteItem(k)));
 }
