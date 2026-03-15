@@ -18,6 +18,7 @@
       "bundleIdentifier": "com.wyle.cos",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Wyle uses your microphone for voice commands.",
+        "NSSpeechRecognitionUsageDescription": "Wyle uses speech recognition to convert your voice to text.",
         "NSCameraUsageDescription": "Wyle uses your camera to scan documents.",
         "NSPhotoLibraryUsageDescription": "Wyle accesses your photos for document uploads."
       }

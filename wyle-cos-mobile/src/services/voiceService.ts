@@ -1,12 +1,11 @@
 // src/services/voiceService.ts
+// Web   → browser SpeechRecognition API (free, Chrome/Edge)
+// Mobile → @react-native-voice/voice (free, uses on-device Google/Apple STT)
+
 import { Platform, Alert } from 'react-native';
 
-type OnTranscriptCallback = (text: string) => void;
+type OnTranscriptCallback  = (text: string) => void;
 type OnStateChangeCallback = (state: 'idle' | 'recording' | 'transcribing') => void;
-
-// Static import — safe because expo-av is installed
-// On web, we just never call the Audio methods
-import { Audio } from 'expo-av';
 
 // ── Web Speech Recognition (Chrome/Edge — free) ──────────────────────────────
 let webRecognition: any = null;
@@ -57,53 +56,61 @@ const stopWebVoice = (onStateChange: OnStateChangeCallback) => {
   onStateChange('idle');
 };
 
-// ── Mobile Voice (expo-av) ────────────────────────────────────────────────────
-let mobileRecording: Audio.Recording | null = null;
+// ── Mobile Voice (@react-native-voice/voice — free, on-device STT) ───────────
+// Uses Google Speech Recognition on Android, Apple STT on iOS. No API key needed.
+let mobileCallbacksSet = false;
+let mobileOnTranscript: OnTranscriptCallback | null = null;
+let mobileOnStateChange: OnStateChangeCallback | null = null;
 
-const startMobileVoice = async (onStateChange: OnStateChangeCallback) => {
-  try {
-    const { granted } = await Audio.requestPermissionsAsync();
-    if (!granted) {
-      Alert.alert('Microphone Required', 'Allow microphone access in Settings.');
-      return;
+const setupMobileVoice = (Voice: any) => {
+  if (mobileCallbacksSet) return;
+  mobileCallbacksSet = true;
+
+  Voice.onSpeechStart   = () => mobileOnStateChange?.('recording');
+  Voice.onSpeechEnd     = () => mobileOnStateChange?.('transcribing');
+  Voice.onSpeechResults = (e: any) => {
+    const transcript = e.value?.[0]?.trim();
+    if (transcript) {
+      mobileOnTranscript?.(transcript);
     }
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-    });
-    const { recording } = await Audio.Recording.createAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
-    );
-    mobileRecording = recording;
-    onStateChange('recording');
-  } catch (err) {
-    console.error('startMobileVoice error:', err);
-    onStateChange('idle');
-    Alert.alert('Error', 'Could not start recording. Try again.');
-  }
+    mobileOnStateChange?.('idle');
+  };
+  Voice.onSpeechError = (e: any) => {
+    console.error('Voice error:', e.error);
+    mobileOnStateChange?.('idle');
+    // Error code 7 = "No match" (user said nothing) — don't alert for that
+    if (e.error?.code !== '7' && e.error?.code !== 7) {
+      Alert.alert('Voice Error', 'Could not recognise speech. Please try again.');
+    }
+  };
 };
 
-const stopMobileVoice = async (
+const startMobileVoice = async (
   onTranscript: OnTranscriptCallback,
   onStateChange: OnStateChangeCallback
 ) => {
-  if (!mobileRecording) { onStateChange('idle'); return; }
-
   try {
-    onStateChange('transcribing');
-    await mobileRecording.stopAndUnloadAsync();
-    await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+    // Dynamic import so web bundle doesn't break (native-only module)
+    const Voice = (await import('@react-native-voice/voice')).default;
 
-    // ── Whisper goes here later ───────────────────────────────────────────
-    // const uri = mobileRecording.getURI();
-    // then POST to Whisper API
+    mobileOnTranscript  = onTranscript;
+    mobileOnStateChange = onStateChange;
+    setupMobileVoice(Voice);
 
-    mobileRecording = null;
+    await Voice.start('en-US');
+  } catch (err: any) {
+    console.error('startMobileVoice error:', err);
     onStateChange('idle');
-    Alert.alert('Voice on Mobile', 'Voice-to-text coming soon. Type your message for now.');
+    Alert.alert('Voice Error', 'Could not start voice recognition. Try again.');
+  }
+};
+
+const stopMobileVoice = async (onStateChange: OnStateChangeCallback) => {
+  try {
+    const Voice = (await import('@react-native-voice/voice')).default;
+    await Voice.stop();
   } catch (err) {
     console.error('stopMobileVoice error:', err);
-    mobileRecording = null;
     onStateChange('idle');
   }
 };
@@ -114,15 +121,15 @@ export const VoiceService = {
     if (Platform.OS === 'web') {
       startWebVoice(onTranscript, onStateChange);
     } else {
-      startMobileVoice(onStateChange);
+      startMobileVoice(onTranscript, onStateChange);
     }
   },
 
-  stop: (onTranscript: OnTranscriptCallback, onStateChange: OnStateChangeCallback) => {
+  stop: (_onTranscript: OnTranscriptCallback, onStateChange: OnStateChangeCallback) => {
     if (Platform.OS === 'web') {
       stopWebVoice(onStateChange);
     } else {
-      stopMobileVoice(onTranscript, onStateChange);
+      stopMobileVoice(onStateChange);
     }
   },
 };
