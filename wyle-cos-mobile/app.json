@@ -51,7 +51,8 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      "@react-native-voice/voice"
     ],
     "experiments": {
       "typedRoutes": true
