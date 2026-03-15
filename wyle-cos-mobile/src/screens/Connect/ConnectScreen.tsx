@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, StatusBar, Animated,
+  ActivityIndicator, StatusBar, Animated, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NavProp } from '../../../app/index';
@@ -251,15 +251,30 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
             </View>
           )}
 
-          {/* ── Connect button ── */}
-          {(step === 'idle') && !googleConnected && (
+          {/* ── Connect button (native only) ── */}
+          {step === 'idle' && !googleConnected && Platform.OS !== 'web' && (
             <TouchableOpacity style={s.connectBtn} onPress={handleConnect}>
               <Text style={s.connectBtnText}>🔗 Connect Gmail + Calendar</Text>
             </TouchableOpacity>
           )}
 
-          {/* ── Setup note ── */}
-          {step === 'idle' && !googleConnected && (
+          {/* ── Web: use phone message ── */}
+          {step === 'idle' && !googleConnected && Platform.OS === 'web' && (
+            <View style={s.phoneCard}>
+              <Text style={s.phoneEmoji}>📱</Text>
+              <Text style={s.phoneTitle}>Open on your phone</Text>
+              <Text style={s.phoneSub}>
+                Gmail & Calendar connection requires the mobile app.{'\n\n'}
+                1. Install <Text style={s.noteCode}>Expo Go</Text> on your phone{'\n'}
+                2. In your terminal run: <Text style={s.noteCode}>npx expo start</Text>{'\n'}
+                3. Scan the QR code with your phone camera{'\n'}
+                4. Tap the banner to connect here
+              </Text>
+            </View>
+          )}
+
+          {/* ── Setup note (native only) ── */}
+          {step === 'idle' && !googleConnected && Platform.OS !== 'web' && (
             <View style={s.noteCard}>
               <Text style={s.noteTitle}>SETUP REQUIRED</Text>
               <Text style={s.noteText}>
@@ -335,4 +350,9 @@ const s = StyleSheet.create({
   noteTitle:      { color: C.salmon, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 6 },
   noteText:       { color: C.textSec, fontSize: 12, lineHeight: 18 },
   noteCode:       { color: C.chartreuse, fontFamily: 'monospace' },
+
+  phoneCard:      { backgroundColor: `${C.verdigris}12`, borderRadius: 16, padding: 20, alignItems: 'center', marginBottom: 16, borderWidth: 1, borderColor: `${C.verdigris}30` },
+  phoneEmoji:     { fontSize: 40, marginBottom: 10 },
+  phoneTitle:     { color: C.white, fontSize: 17, fontWeight: '700', marginBottom: 10 },
+  phoneSub:       { color: C.textSec, fontSize: 13, lineHeight: 22, textAlign: 'left', width: '100%' },
 });
