@@ -11,10 +11,15 @@ WebBrowser.maybeCompleteAuthSession();
 
 const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '';
 
-// Expo auth proxy — stable URL registered in Google Cloud Console.
-// Works for Expo Go on phone regardless of which Codespace/machine you're on.
-// Web browser cannot receive deep-link callbacks, so OAuth is native-only.
-const EXPO_REDIRECT_URI = 'https://auth.expo.io/@product.team.wyle/wyle-cos-mobile';
+// expo-auth-session v7 (SDK 54+) removed the auth.expo.io proxy.
+// makeRedirectUri() now returns:
+//   - Expo Go (tunnel): exp://xxx.exp.direct
+//   - Standalone app:   com.wyle.cos:// (matches app.json scheme + android package)
+// The returned URI must be registered in Google Cloud Console each session (Expo Go)
+// or once permanently (standalone APK/IPA).
+export function getOAuthRedirectUri(): string {
+  return AuthSession.makeRedirectUri({ scheme: 'com.wyle.cos' });
+}
 
 const SCOPES = [
   'openid',
@@ -76,7 +81,8 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
   }
 
   try {
-    const redirectUri = EXPO_REDIRECT_URI;
+    const redirectUri = getOAuthRedirectUri();
+    console.log('[GoogleAuth] redirect URI →', redirectUri); // copy this into Google Cloud Console
 
     const request = new AuthSession.AuthRequest({
       clientId:            GOOGLE_CLIENT_ID,

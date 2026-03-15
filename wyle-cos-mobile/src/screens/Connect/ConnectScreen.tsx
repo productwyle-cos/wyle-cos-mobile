@@ -9,7 +9,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
-import { signInWithGoogle, isGoogleConnected, disconnectGoogle } from '../../services/googleAuthService';
+import { signInWithGoogle, isGoogleConnected, disconnectGoogle, getOAuthRedirectUri } from '../../services/googleAuthService';
 import { runFullSignalScan } from '../../services/signalService';
 import { UIObligation } from '../../types';
 
@@ -276,11 +276,12 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
           {/* ── Setup note (native only) ── */}
           {step === 'idle' && !googleConnected && Platform.OS !== 'web' && (
             <View style={s.noteCard}>
-              <Text style={s.noteTitle}>SETUP REQUIRED</Text>
+              <Text style={s.noteTitle}>GOOGLE CLOUD CONSOLE — ADD THIS REDIRECT URI</Text>
               <Text style={s.noteText}>
-                Add your Google Client ID to .env:{'\n'}
-                <Text style={s.noteCode}>EXPO_PUBLIC_GOOGLE_CLIENT_ID=your_client_id{'\n'}</Text>
-                Get it from console.cloud.google.com → Enable Gmail API + Calendar API → OAuth 2.0 credentials
+                Go to console.cloud.google.com → Credentials → your Web client → Authorized redirect URIs → Add:{'\n\n'}
+                <Text style={s.noteCode}>{getOAuthRedirectUri()}</Text>
+                {'\n\n'}Also add permanently for APK/IPA:{'\n'}
+                <Text style={s.noteCode}>com.wyle.cos://</Text>
               </Text>
             </View>
           )}
