@@ -49,6 +49,13 @@
         "expo-camera",
         { "cameraPermission": "Wyle uses camera to scan your documents." }
       ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Wyle uses your microphone for voice input.",
+          "speechRecognitionPermission": "Wyle uses speech recognition to convert your voice to text."
+        }
+      ],
       "./plugins/withAndroidExcludeSupport"
     ],
     "experiments": {

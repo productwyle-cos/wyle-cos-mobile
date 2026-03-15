@@ -1,8 +1,13 @@
 // src/services/voiceService.ts
-// Web   → browser SpeechRecognition API (free, Chrome/Edge)
-// Mobile → @react-native-voice/voice (free, uses on-device Google/Apple STT)
+// Web    → browser SpeechRecognition API (free, Chrome/Edge)
+// Mobile → expo-speech-recognition (free, on-device Google/Apple STT)
+//          Static import works because expo-speech-recognition is a no-op on web.
 
 import { Platform, Alert } from 'react-native';
+import {
+  ExpoSpeechRecognitionModule,
+  addSpeechRecognitionListener,
+} from 'expo-speech-recognition';
 
 type OnTranscriptCallback  = (text: string) => void;
 type OnStateChangeCallback = (state: 'idle' | 'recording' | 'transcribing') => void;
@@ -56,33 +61,20 @@ const stopWebVoice = (onStateChange: OnStateChangeCallback) => {
   onStateChange('idle');
 };
 
-// ── Mobile Voice (@react-native-voice/voice — free, on-device STT) ───────────
-// Uses Google Speech Recognition on Android, Apple STT on iOS. No API key needed.
-let mobileCallbacksSet = false;
-let mobileOnTranscript: OnTranscriptCallback | null = null;
-let mobileOnStateChange: OnStateChangeCallback | null = null;
+// ── Mobile Voice (expo-speech-recognition — free, on-device STT) ─────────────
+// Uses Google Speech on Android, Apple STT on iOS. No API key needed.
+// expo-speech-recognition is a no-op on web so the static import is safe.
 
-const setupMobileVoice = (Voice: any) => {
-  if (mobileCallbacksSet) return;
-  mobileCallbacksSet = true;
+let resultSub: ReturnType<typeof addSpeechRecognitionListener> | null = null;
+let errorSub:  ReturnType<typeof addSpeechRecognitionListener> | null = null;
+let startSub:  ReturnType<typeof addSpeechRecognitionListener> | null = null;
+let endSub:    ReturnType<typeof addSpeechRecognitionListener> | null = null;
 
-  Voice.onSpeechStart   = () => mobileOnStateChange?.('recording');
-  Voice.onSpeechEnd     = () => mobileOnStateChange?.('transcribing');
-  Voice.onSpeechResults = (e: any) => {
-    const transcript = e.value?.[0]?.trim();
-    if (transcript) {
-      mobileOnTranscript?.(transcript);
-    }
-    mobileOnStateChange?.('idle');
-  };
-  Voice.onSpeechError = (e: any) => {
-    console.error('Voice error:', e.error);
-    mobileOnStateChange?.('idle');
-    // Error code 7 = "No match" (user said nothing) — don't alert for that
-    if (e.error?.code !== '7' && e.error?.code !== 7) {
-      Alert.alert('Voice Error', 'Could not recognise speech. Please try again.');
-    }
-  };
+const removeMobileListeners = () => {
+  resultSub?.remove(); resultSub = null;
+  errorSub?.remove();  errorSub  = null;
+  startSub?.remove();  startSub  = null;
+  endSub?.remove();    endSub    = null;
 };
 
 const startMobileVoice = async (
@@ -90,34 +82,72 @@ const startMobileVoice = async (
   onStateChange: OnStateChangeCallback
 ) => {
   try {
-    // Dynamic import so web bundle doesn't break (native-only module)
-    const Voice = (await import('@react-native-voice/voice')).default;
+    // Ask for mic + speech recognition permission
+    const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!granted) {
+      Alert.alert(
+        'Microphone Permission',
+        'Please allow microphone access in Settings to use voice input.'
+      );
+      onStateChange('idle');
+      return;
+    }
 
-    mobileOnTranscript  = onTranscript;
-    mobileOnStateChange = onStateChange;
-    setupMobileVoice(Voice);
+    removeMobileListeners();
 
-    await Voice.start('en-US');
+    startSub = addSpeechRecognitionListener('start', () => {
+      onStateChange('recording');
+    });
+
+    endSub = addSpeechRecognitionListener('end', () => {
+      onStateChange('idle');
+      removeMobileListeners();
+    });
+
+    resultSub = addSpeechRecognitionListener('result', (event) => {
+      const transcript = event.results?.[0]?.transcript?.trim();
+      if (transcript && event.isFinal) {
+        onTranscript(transcript);
+        onStateChange('idle');
+        removeMobileListeners();
+      }
+    });
+
+    errorSub = addSpeechRecognitionListener('error', (event) => {
+      console.error('Voice error:', event);
+      onStateChange('idle');
+      removeMobileListeners();
+      // 'no-speech' = user was silent, 'aborted' = user stopped — skip alert
+      if (event.code !== 'no-speech' && event.code !== 'aborted') {
+        Alert.alert('Voice Error', 'Could not recognise speech. Please try again.');
+      }
+    });
+
+    await ExpoSpeechRecognitionModule.start({ lang: 'en-US', interimResults: false });
   } catch (err: any) {
     console.error('startMobileVoice error:', err);
     onStateChange('idle');
+    removeMobileListeners();
     Alert.alert('Voice Error', 'Could not start voice recognition. Try again.');
   }
 };
 
 const stopMobileVoice = async (onStateChange: OnStateChangeCallback) => {
   try {
-    const Voice = (await import('@react-native-voice/voice')).default;
-    await Voice.stop();
+    await ExpoSpeechRecognitionModule.stop();
   } catch (err) {
     console.error('stopMobileVoice error:', err);
     onStateChange('idle');
+    removeMobileListeners();
   }
 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
 export const VoiceService = {
-  start: (onTranscript: OnTranscriptCallback, onStateChange: OnStateChangeCallback) => {
+  start: (
+    onTranscript: OnTranscriptCallback,
+    onStateChange: OnStateChangeCallback
+  ) => {
     if (Platform.OS === 'web') {
       startWebVoice(onTranscript, onStateChange);
     } else {
@@ -125,7 +155,10 @@ export const VoiceService = {
     }
   },
 
-  stop: (_onTranscript: OnTranscriptCallback, onStateChange: OnStateChangeCallback) => {
+  stop: (
+    _onTranscript: OnTranscriptCallback,
+    onStateChange: OnStateChangeCallback
+  ) => {
     if (Platform.OS === 'web') {
       stopWebVoice(onStateChange);
     } else {
