@@ -33,7 +33,9 @@
       "permissions": [
         "RECORD_AUDIO",
         "CAMERA",
-        "READ_EXTERNAL_STORAGE"
+        "READ_EXTERNAL_STORAGE",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -53,6 +55,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f8c38aab-ed23-41da-af88-abaa0a18fabb"
+      }
     }
   }
 }
