@@ -119,7 +119,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
         }));
         await new Promise(r => setTimeout(r, 600));
       }
-      navigation.navigate('home');
+      navigation.navigate('preparation');
     } catch (e: any) {
       setError(e.message || 'Authentication failed. Try again.');
       shake();
@@ -140,7 +140,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
           email: result.user?.email || '',
           onboardingComplete: true,
         }));
-        navigation.navigate('home');
+        navigation.navigate('preparation');
       }
     } catch (e: any) {
       setError('Google sign-in failed. Try again.');

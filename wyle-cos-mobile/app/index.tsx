@@ -1,6 +1,5 @@
 // ─── app/index.tsx ────────────────────────────────────────────────────────────
-// REPLACE the entire contents of app/index.tsx with this.
-// This is the single entry point — controls every screen transition.
+// Single entry point — controls every screen transition.
 
 import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
@@ -8,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import SplashScreen        from '../src/screens/Onboarding/SplashScreen';
 import LoginScreen         from '../src/screens/Onboarding/LoginScreen';
+import PreparationScreen   from '../src/screens/Onboarding/PreparationScreen';
 import HomeScreen          from '../src/screens/Home/HomeScreen';
 import ObligationsScreen   from '../src/screens/Obligations/ObligationsScreen';
 import BuddyScreen         from '../src/screens/Buddy/BuddyScreen';
@@ -18,6 +18,7 @@ import ConnectScreen       from '../src/screens/Connect/ConnectScreen';
 export type ScreenName =
   | 'splash'
   | 'login'
+  | 'preparation'   // ← shown for 2.5 s after login before home
   | 'home'
   | 'obligations'
   | 'buddy'
@@ -58,15 +59,16 @@ export default function AppEntry() {
   }
 
   switch (screen) {
-    case 'splash':       return <SplashScreen       navigation={navigation} />;
-    case 'login':        return <LoginScreen         navigation={navigation} />;
-    case 'home':         return <HomeScreen          navigation={navigation} />;
-    case 'obligations':  return <ObligationsScreen   navigation={navigation} />;
-    case 'buddy':        return <BuddyScreen         navigation={navigation} />;
-    case 'insights':     return <InsightsScreen      navigation={navigation} />;
-    case 'morningBrief': return <MorningBriefScreen  navigation={navigation} />;
-    case 'connect':      return <ConnectScreen       navigation={navigation} />;
-    default:             return <SplashScreen        navigation={navigation} />;
+    case 'splash':       return <SplashScreen        navigation={navigation} />;
+    case 'login':        return <LoginScreen          navigation={navigation} />;
+    case 'preparation':  return <PreparationScreen    navigation={navigation} />;
+    case 'home':         return <HomeScreen           navigation={navigation} />;
+    case 'obligations':  return <ObligationsScreen    navigation={navigation} />;
+    case 'buddy':        return <BuddyScreen          navigation={navigation} />;
+    case 'insights':     return <InsightsScreen       navigation={navigation} />;
+    case 'morningBrief': return <MorningBriefScreen   navigation={navigation} />;
+    case 'connect':      return <ConnectScreen        navigation={navigation} />;
+    default:             return <SplashScreen         navigation={navigation} />;
   }
 }
 
