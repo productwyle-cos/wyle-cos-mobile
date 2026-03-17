@@ -1129,3 +1129,7 @@ const bd = StyleSheet.create({
   dupeLabelText:  { color: C.verdigris, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 },
   dupeName:       { flex: 1, color: C.white, fontSize: 12, fontWeight: '600' },
 });
+
+// HologramOrb and TabBar reference `s.*` — alias styles so they resolve correctly
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const s = styles;
