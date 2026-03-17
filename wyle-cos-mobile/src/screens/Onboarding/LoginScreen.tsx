@@ -6,7 +6,7 @@ import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   TextInput, Animated, KeyboardAvoidingView,
-  Platform, ScrollView, ActivityIndicator, StatusBar,
+  Platform, ScrollView, ActivityIndicator, StatusBar, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -33,6 +33,24 @@ const C = {
 // ── Set to true to use real backend ─────────────────────────────────────────
 const USE_REAL_API = false;
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
+
+// ── Google four-colour logo mark ─────────────────────────────────────────────
+function GoogleLogo() {
+  return (
+    <View style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+      {/* Top-left: red */}
+      <View style={{ position: 'absolute', top: 0, left: 0, width: 10, height: 10, borderTopLeftRadius: 10, backgroundColor: '#EA4335' }} />
+      {/* Top-right: blue */}
+      <View style={{ position: 'absolute', top: 0, right: 0, width: 10, height: 10, borderTopRightRadius: 10, backgroundColor: '#4285F4' }} />
+      {/* Bottom-left: yellow */}
+      <View style={{ position: 'absolute', bottom: 0, left: 0, width: 10, height: 10, borderBottomLeftRadius: 10, backgroundColor: '#FBBC05' }} />
+      {/* Bottom-right: green */}
+      <View style={{ position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderBottomRightRadius: 10, backgroundColor: '#34A853' }} />
+      {/* Centre cutout */}
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFFFFF', zIndex: 2 }} />
+    </View>
+  );
+}
 
 // ── Field icon (emoji fallback — no extra package needed) ────────────────────
 function FieldIcon({ icon }: { icon: string }) {
@@ -72,8 +90,9 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
   const [email, setEmail]       = useState('');
   const [location, setLocation] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState('');
+  const [loading, setLoading]         = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [error, setError]             = useState('');
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
@@ -129,21 +148,42 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
   };
 
   const handleGoogle = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('Not supported', 'Google Sign-In is available on the mobile app only.');
+      return;
+    }
+    // Guard: check that a Google client ID has been configured
+    const clientIdSet = !!(
+      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID ||
+      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS     ||
+      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID
+    );
+    if (!clientIdSet) {
+      Alert.alert('Setup required', 'Google Client ID is not configured. Add EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID to your .env file.');
+      return;
+    }
+
+    setGoogleLoading(true);
+    setError('');
     try {
       const { signInWithGoogle } = await import('@services/googleAuthService');
       const result = await signInWithGoogle();
-      if (result.success) {
-        await AsyncStorage.setItem('wyle_token', 'google_token_demo');
-        await AsyncStorage.setItem('wyle_user', JSON.stringify({
-          _id: 'g1',
-          name: result.user?.name || 'Google User',
-          email: result.user?.email || '',
-          onboardingComplete: true,
-        }));
-        navigation.navigate('preparation');
+      if (!result.success) {
+        if (result.error !== 'Cancelled') setError(result.error || 'Google sign-in failed.');
+        return;
       }
+      await AsyncStorage.setItem('wyle_token', 'google_token_demo');
+      await AsyncStorage.setItem('wyle_user', JSON.stringify({
+        _id: 'g1',
+        name: result.email.split('@')[0] || 'Google User',
+        email: result.email,
+        onboardingComplete: true,
+      }));
+      navigation.navigate('preparation');
     } catch (e: any) {
-      setError('Google sign-in failed. Try again.');
+      setError(e?.message || 'Google sign-in failed. Try again.');
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -305,12 +345,22 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
 
               {/* ── Google Sign-In ──────────────────────────────────────── */}
               <TouchableOpacity
-                style={styles.googleBtn}
+                style={[styles.googleBtn, googleLoading && { opacity: 0.7 }]}
                 onPress={handleGoogle}
-                activeOpacity={0.85}
+                activeOpacity={0.88}
+                disabled={googleLoading}
               >
-                <Text style={styles.googleIcon}>G</Text>
-                <Text style={styles.googleText}>Continue with Google</Text>
+                {googleLoading ? (
+                  <ActivityIndicator color="#1F1F1F" size="small" />
+                ) : (
+                  <>
+                    {/* Google logo */}
+                    <GoogleLogo />
+                    {/* 1 px vertical divider — Google spec */}
+                    <View style={styles.googleDivider} />
+                    <Text style={styles.googleText}>Sign in with Google</Text>
+                  </>
+                )}
               </TouchableOpacity>
 
             </Animated.View>
@@ -413,25 +463,35 @@ const styles = StyleSheet.create({
   dividerLine: { flex: 1, height: 1, backgroundColor: C.border },
   dividerText: { color: C.textTer, fontSize: 13 },
 
-  // ── Google button
+  // ── Google button  (Google brand spec: white bg, #1F1F1F label, 1px border)
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: C.border,
+    backgroundColor: '#FFFFFF',
     borderRadius: 999,
-    paddingVertical: 16,
-    gap: 10,
-    backgroundColor: C.surface,
+    height: 48,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    // shadow for depth on the dark bg
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  googleIcon: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: C.white,
-    fontStyle: 'italic',
+  googleDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#E0E0E0',
   },
-  googleText: { color: C.white, fontSize: 15, fontWeight: '600' },
+  googleText: {
+    color: '#1F1F1F',
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: 0.25,
+  },
 
   // ── Footer
   footer: {
