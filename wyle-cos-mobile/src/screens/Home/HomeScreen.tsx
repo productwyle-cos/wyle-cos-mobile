@@ -13,6 +13,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
+import { UIObligation } from '../../types';
 import { generateBrief, getBriefKey, getBriefTimeOfDay, isBriefStale } from '../../services/briefService';
 
 const { width } = Dimensions.get('window');
@@ -46,24 +47,21 @@ function getTimeString() {
   return new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-// ── Mock data (named constants — not inline magic numbers) ────────────────────
+// ── Static stats (will be replaced by real data once backend is live) ─────────
 const MOCK_STATS = {
   hoursSaved: 4.5,
   running:    7,
   reliable:   99,
 };
 
-const MOCK_ALERTS = [
-  { id: '1', title: 'Emirates ID expires in 5 days',       subtitle: 'Renewal process takes 3-5 days',  daysUntil: 5,  risk: 'high',   category: '🪪' },
-  { id: '2', title: 'Range Rover registration',             subtitle: 'Due February 12, 2026',           daysUntil: 7,  risk: 'high',   category: '🚗' },
-  { id: '3', title: 'Driver visa renewal',                  subtitle: 'Process begins Feb 10',           daysUntil: 14, risk: 'medium', category: '🛂' },
-  { id: '4', title: 'School fee',                           subtitle: 'AED 24,500',                      daysUntil: 21, risk: 'medium', category: '🏫' },
-];
-
-const MOCK_EXECUTE = [
-  { id: 'e1', title: 'Draft visa renewal application', confidence: 94, saves: '1.2h', reviewTime: '6m'  },
-  { id: 'e2', title: 'Schedule Range Rover service',   confidence: 91, saves: '45m',  reviewTime: '12m' },
-];
+// ── Derive a "Ready to Execute" item from a real obligation ───────────────────
+function toExecuteItem(ob: UIObligation) {
+  const conf  = ob.risk === 'high' ? 94 : ob.risk === 'medium' ? 88 : 76;
+  const saves = ['visa', 'emirates_id'].includes(ob.type)           ? '1.2h'
+              : ['car_registration', 'insurance'].includes(ob.type) ? '45m'
+              : '20m';
+  return { id: ob._id, title: ob.executionPath, confidence: conf, saves, reviewTime: '8m' };
+}
 
 // ── Urgency colour helper ─────────────────────────────────────────────────────
 function riskColor(risk: string, days: number): string {
@@ -106,23 +104,25 @@ function StatsBar() {
 }
 
 // ── Urgent Card (most critical alert) ────────────────────────────────────────
-function UrgentCard({ alert, onPress }: { alert: typeof MOCK_ALERTS[0]; onPress: () => void }) {
+function UrgentCard({ alert, onPress }: { alert: UIObligation; onPress: () => void }) {
+  const dueLabel = alert.daysUntil === 0 ? 'TODAY' : `${alert.daysUntil}d`;
+  const subtitle = alert.notes ?? alert.executionPath;
   return (
     <View style={s.urgentCard}>
-      {/* Top row: badge + days */}
+      {/* Top row: emoji + badge + days */}
       <View style={s.urgentTop}>
         <View style={s.urgentBadge}>
           <View style={s.urgentDot} />
           <Text style={s.urgentBadgeText}>URGENT</Text>
         </View>
         <View style={s.urgentDaysWrap}>
-          <Text style={s.urgentDaysNum}>{alert.daysUntil}</Text>
-          <Text style={s.urgentDaysLabel}>DAYS</Text>
+          <Text style={s.urgentDaysNum}>{dueLabel}</Text>
+          {alert.daysUntil > 0 && <Text style={s.urgentDaysLabel}>DAYS</Text>}
         </View>
       </View>
       {/* Content */}
-      <Text style={s.urgentTitle}>{alert.title}</Text>
-      <Text style={s.urgentSub}>{alert.subtitle}</Text>
+      <Text style={s.urgentTitle}>{alert.emoji}  {alert.title}</Text>
+      <Text style={s.urgentSub}>{subtitle}</Text>
       {/* CTA */}
       <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
         <LinearGradient
@@ -138,19 +138,21 @@ function UrgentCard({ alert, onPress }: { alert: typeof MOCK_ALERTS[0]; onPress:
 }
 
 // ── Featured Task Card (largest) ──────────────────────────────────────────────
-function FeaturedTaskCard({ item, onPress }: { item: typeof MOCK_ALERTS[0]; onPress: () => void }) {
+function FeaturedTaskCard({ item, onPress }: { item: UIObligation; onPress: () => void }) {
   const rc = riskColor(item.risk, item.daysUntil);
   const [g1, g2, g3] = taskGradient(item.daysUntil);
+  const subtitle = item.notes ?? item.executionPath;
+  const dueLabel = item.daysUntil === 0 ? 'TODAY' : `${item.daysUntil} DAYS`;
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={s.featuredCard}>
       {/* Top gradient border */}
       <LinearGradient colors={[g1, g2, g3]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.featuredBorder} />
       <View style={s.featuredInner}>
         <View style={[s.daysBadge, { backgroundColor: `${rc}22`, borderColor: `${rc}44` }]}>
-          <Text style={[s.daysBadgeText, { color: rc }]}>{item.daysUntil} DAYS</Text>
+          <Text style={[s.daysBadgeText, { color: rc }]}>{dueLabel}</Text>
         </View>
-        <Text style={s.featuredTitle}>{item.title}</Text>
-        <Text style={s.featuredSub}>{item.subtitle}</Text>
+        <Text style={s.featuredTitle}>{item.emoji}  {item.title}</Text>
+        <Text style={s.featuredSub}>{subtitle}</Text>
         <Text style={s.featuredArrow}>›</Text>
       </View>
     </TouchableOpacity>
@@ -158,15 +160,16 @@ function FeaturedTaskCard({ item, onPress }: { item: typeof MOCK_ALERTS[0]; onPr
 }
 
 // ── Small Task Card ───────────────────────────────────────────────────────────
-function SmallTaskCard({ item, onPress }: { item: typeof MOCK_ALERTS[0]; onPress: () => void }) {
+function SmallTaskCard({ item, onPress }: { item: UIObligation; onPress: () => void }) {
   const rc = riskColor(item.risk, item.daysUntil);
+  const dueLabel = item.daysUntil === 0 ? 'TODAY' : `${item.daysUntil}`;
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={s.smallCard}>
-      <Text style={s.smallCardTitle}>{item.title}</Text>
-      <Text style={s.smallCardSub} numberOfLines={1}>{item.subtitle}</Text>
+      <Text style={s.smallCardTitle}>{item.emoji}  {item.title}</Text>
+      <Text style={s.smallCardSub} numberOfLines={1}>{item.notes ?? item.executionPath}</Text>
       <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3, marginTop: 8 }}>
-        <Text style={[s.smallDaysNum, { color: rc }]}>{item.daysUntil}</Text>
-        <Text style={s.smallDaysLabel}>DAYS</Text>
+        <Text style={[s.smallDaysNum, { color: rc }]}>{dueLabel}</Text>
+        {item.daysUntil > 0 && <Text style={s.smallDaysLabel}>DAYS</Text>}
       </View>
     </TouchableOpacity>
   );
@@ -304,11 +307,24 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
   const fadeIn  = useRef(new Animated.Value(0)).current;
   const slideUp = useRef(new Animated.Value(20)).current;
 
-  // Derive data from mock + store
-  const urgentAlert    = MOCK_ALERTS.find(a => a.risk === 'high') ?? null;
-  const featuredTask   = MOCK_ALERTS[1] ?? null; // second high-priority task
-  const gridTasks      = MOCK_ALERTS.slice(2);   // rest in 2-col grid
-  const activeCount    = MOCK_ALERTS.filter(a => a.daysUntil <= 30).length;
+  // ── Derive everything from the live obligations store ──────────────────────
+  // Active (non-completed) sorted by urgency: daysUntil asc, then risk weight
+  const riskWeight = (r: string) => r === 'high' ? 0 : r === 'medium' ? 1 : 2;
+  const active = obligations
+    .filter(o => o.status !== 'completed')
+    .slice()
+    .sort((a, b) => a.daysUntil - b.daysUntil || riskWeight(a.risk) - riskWeight(b.risk));
+
+  const urgentAlert  = active[0] ?? null;          // most critical
+  const featuredTask = active[1] ?? null;           // second most critical
+  const gridTasks    = active.slice(2, 6);          // up to 4 more in grid
+  const activeCount  = active.length;
+
+  // "Ready to Execute" — top 2 high/medium risk items mapped to action cards
+  const executeItems = active
+    .filter(o => o.risk === 'high' || o.risk === 'medium')
+    .slice(0, 2)
+    .map(toExecuteItem);
   const isEvening      = getBriefTimeOfDay() === 'evening';
 
   useEffect(() => {
@@ -428,10 +444,10 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
           <View style={s.sectionRow}>
             <Text style={s.sectionTitle}>READY TO EXECUTE</Text>
             <View style={s.activeBadge}>
-              <Text style={s.activeBadgeText}>{MOCK_EXECUTE.length}</Text>
+              <Text style={s.activeBadgeText}>{executeItems.length}</Text>
             </View>
           </View>
-          {MOCK_EXECUTE.map(item => (
+          {executeItems.map(item => (
             <ExecuteCard
               key={item.id}
               item={item}

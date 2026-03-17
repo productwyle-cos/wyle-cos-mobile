@@ -5,12 +5,12 @@ import { STORAGE_KEYS } from '../constants';
 
 // ── Mock data uses UIObligation — clean, no backend fields needed ──────────────
 const INITIAL_OBLIGATIONS: UIObligation[] = [
-  { _id: '1', emoji: '🛂', title: 'UAE Residence Visa',  type: 'visa',            daysUntil: 8,  risk: 'high',   amount: null,  status: 'active', executionPath: 'GDRFA website — 45min process', notes: 'Requires passport + EID copy' },
-  { _id: '2', emoji: '🪪', title: 'Emirates ID Renewal', type: 'emirates_id',     daysUntil: 22, risk: 'medium', amount: 370,   status: 'active', executionPath: 'ICA smart app — 20min',         notes: null },
-  { _id: '3', emoji: '🚗', title: 'Car Registration',    type: 'car_registration', daysUntil: 31, risk: 'medium', amount: 450,   status: 'active', executionPath: 'RTA online portal',             notes: 'Needs insurance first' },
-  { _id: '4', emoji: '🛡️', title: 'Car Insurance',       type: 'insurance',       daysUntil: 45, risk: 'low',    amount: 2100,  status: 'active', executionPath: 'AXA UAE app',                   notes: null },
-  { _id: '5', emoji: '💡', title: 'DEWA Bill',           type: 'bill',            daysUntil: 12, risk: 'low',    amount: 850,   status: 'active', executionPath: 'DEWA app — auto pay',           notes: null },
-  { _id: '6', emoji: '🎓', title: 'School Fee — Q3',     type: 'school_fee',      daysUntil: 0,  risk: 'high',   amount: 14000, status: 'active', executionPath: 'School parent portal',          notes: 'Due today' },
+  { _id: '1', emoji: '🎓', title: 'School Fee — Q3',       type: 'school_fee',       daysUntil: 0,  risk: 'high',   amount: 14000, status: 'active', executionPath: 'Pay via school parent portal',   notes: 'Due today — avoid late fee' },
+  { _id: '2', emoji: '🪪', title: 'Emirates ID Renewal',   type: 'emirates_id',      daysUntil: 5,  risk: 'high',   amount: 370,   status: 'active', executionPath: 'ICA smart app — 20min process',  notes: 'Renewal takes 3-5 working days' },
+  { _id: '3', emoji: '🚗', title: 'Range Rover Reg.',       type: 'car_registration', daysUntil: 7,  risk: 'high',   amount: 450,   status: 'active', executionPath: 'RTA online portal or drive-in',  notes: 'Needs valid insurance first' },
+  { _id: '4', emoji: '🛂', title: 'UAE Residence Visa',     type: 'visa',             daysUntil: 14, risk: 'medium', amount: null,  status: 'active', executionPath: 'GDRFA website — 45min process', notes: 'Requires passport + EID copy' },
+  { _id: '5', emoji: '💡', title: 'DEWA Bill',              type: 'bill',             daysUntil: 12, risk: 'medium', amount: 850,   status: 'active', executionPath: 'DEWA app — auto pay',            notes: null },
+  { _id: '6', emoji: '🛡️', title: 'Car Insurance',          type: 'insurance',        daysUntil: 38, risk: 'low',    amount: 2100,  status: 'active', executionPath: 'AXA UAE app',                    notes: null },
 ];
 
 interface AppState {
