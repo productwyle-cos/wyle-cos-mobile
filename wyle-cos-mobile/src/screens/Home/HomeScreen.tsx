@@ -304,8 +304,10 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
   const [greeting, setGreeting]   = useState(getGreeting());
   const [briefLoading, setBriefLoading] = useState(false);
 
-  const fadeIn  = useRef(new Animated.Value(0)).current;
-  const slideUp = useRef(new Animated.Value(20)).current;
+  const fadeIn        = useRef(new Animated.Value(0)).current;
+  const slideUp       = useRef(new Animated.Value(20)).current;
+  // Track obligations fingerprint — regenerate brief whenever tasks change
+  const prevObsKey    = useRef<string>('');
 
   // ── Derive everything from the live obligations store ──────────────────────
   // Active (non-completed) sorted by urgency: daysUntil asc, then risk weight
@@ -359,6 +361,25 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
     return () => clearInterval(tick);
   }, []);
 
+  // ── Re-generate brief whenever obligations change ─────────────────────────
+  // Fingerprint = "<total>:<active>:<high-risk titles>" so any add/resolve/
+  // new voice brain-dump triggers a fresh Claude-generated brief immediately.
+  useEffect(() => {
+    const activeObs  = obligations.filter(o => o.status !== 'completed');
+    const fingerprint = `${obligations.length}:${activeObs.length}:` +
+      activeObs.filter(o => o.risk === 'high').map(o => o._id).sort().join(',');
+
+    if (fingerprint === prevObsKey.current) return; // nothing changed
+    prevObsKey.current = fingerprint;
+
+    if (briefLoading) return; // already in-flight
+    setBriefLoading(true);
+    generateBrief(obligations, MOCK_STATS.reliable)
+      .then(b => { setMorningBrief(b); setLastBriefKey(getBriefKey()); })
+      .catch(() => {})
+      .finally(() => setBriefLoading(false));
+  }, [obligations]);
+
   return (
     <View style={s.container}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
@@ -386,6 +407,32 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
         {/* ── Stats Bar ──────────────────────────────────────────────────────── */}
         <Animated.View style={{ opacity: fadeIn, transform: [{ translateY: slideUp }] }}>
           <StatsBar />
+        </Animated.View>
+
+        {/* ── Morning Brief / Evening Recap Banner ───────────────────────── */}
+        <Animated.View style={{ opacity: fadeIn }}>
+          <TouchableOpacity
+            style={s.briefBanner}
+            onPress={() => nav.navigate('morningBrief')}
+            activeOpacity={0.85}
+          >
+            {briefLoading ? (
+              <ActivityIndicator color={C.verdigris} size="small" style={{ width: 32 }} />
+            ) : (
+              <Text style={s.briefBannerIcon}>{isEvening ? '🌙' : '☀️'}</Text>
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={s.briefBannerLabel}>
+                {isEvening ? 'EVENING RECAP' : 'MORNING BRIEF'} · LIVE
+              </Text>
+              <Text style={s.briefBannerHeadline} numberOfLines={1}>
+                {briefLoading
+                  ? 'Buddy is preparing your brief…'
+                  : morningBrief?.headline ?? 'Tap to view today\'s priorities'}
+              </Text>
+            </View>
+            <Text style={s.briefBannerArrow}>›</Text>
+          </TouchableOpacity>
         </Animated.View>
 
         {/* ── Urgent Card ────────────────────────────────────────────────────── */}
@@ -593,6 +640,19 @@ const s = StyleSheet.create({
   },
   qaIcon:  { fontSize: 22, color: C.textSec },
   qaLabel: { color: C.white, fontSize: 14, fontWeight: '600' },
+
+  // ── Morning / Evening brief banner
+  briefBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: C.surface, borderRadius: 16, padding: 14,
+    marginHorizontal: 16, marginBottom: 14,
+    borderWidth: 1, borderColor: C.border,
+    borderLeftWidth: 3, borderLeftColor: C.verdigris,
+  },
+  briefBannerIcon:     { fontSize: 22, width: 32, textAlign: 'center' },
+  briefBannerLabel:    { color: C.verdigris, fontSize: 9, fontWeight: '800', letterSpacing: 2, marginBottom: 4 },
+  briefBannerHeadline: { color: C.white, fontSize: 13, fontWeight: '600', lineHeight: 18 },
+  briefBannerArrow:    { color: C.chartreuse, fontSize: 20, fontWeight: '300' },
 
   // ── Life signal banner
   signalBanner: {
