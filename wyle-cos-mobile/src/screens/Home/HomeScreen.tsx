@@ -57,6 +57,19 @@ const MOCK_STATS = {
 };
 
 // ── Derive a "Ready to Execute" item from a real obligation ───────────────────
+// ── Google four-colour logo mark ─────────────────────────────────────────────
+function GoogleLogo() {
+  return (
+    <View style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ position: 'absolute', top: 0,    left: 0,  width: 10, height: 10, borderTopLeftRadius: 10,     backgroundColor: '#EA4335' }} />
+      <View style={{ position: 'absolute', top: 0,    right: 0, width: 10, height: 10, borderTopRightRadius: 10,    backgroundColor: '#4285F4' }} />
+      <View style={{ position: 'absolute', bottom: 0, left: 0,  width: 10, height: 10, borderBottomLeftRadius: 10,  backgroundColor: '#FBBC05' }} />
+      <View style={{ position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderBottomRightRadius: 10, backgroundColor: '#34A853' }} />
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFFFFF', zIndex: 2 }} />
+    </View>
+  );
+}
+
 function toExecuteItem(ob: UIObligation) {
   const conf  = ob.risk === 'high' ? 94 : ob.risk === 'medium' ? 88 : 76;
   const saves = ['visa', 'emirates_id'].includes(ob.type)           ? '1.2h'
@@ -376,47 +389,57 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
     return () => clearInterval(tick);
   }, []);
 
-  // ── Google OAuth connect (called directly from signal banner) ─────────────
+  // ── Google OAuth connect ──────────────────────────────────────────────────
   const handleGoogleConnect = async () => {
     if (Platform.OS === 'web') {
-      Alert.alert('Not supported', 'Google sign-in is available on the Android/iOS app.');
+      Alert.alert('Not available on web', 'Google sign-in works on the Android and iOS apps.');
       return;
     }
+
+    // Guard: credentials not configured yet
+    const clientIdSet = !!(
+      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID ||
+      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS     ||
+      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID
+    );
+    if (!clientIdSet) {
+      Alert.alert(
+        'Setup required',
+        'Google Client ID is not configured.\n\n' +
+        'Add EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID to your .env and rebuild the app.',
+      );
+      return;
+    }
+
     setGoogleConnecting(true);
     setScanSummary(null);
     try {
       const result = await signInWithGoogle();
       if (!result.success) {
-        Alert.alert(
-          'Connection failed',
-          result.error === 'Cancelled'
-            ? 'Sign-in was cancelled.'
-            : result.error || 'Could not connect to Google. Check your internet connection.',
-        );
+        if (result.error !== 'Cancelled') {
+          Alert.alert('Sign-in failed', result.error || 'Could not connect to Google.');
+        }
         return;
       }
-      // Store connected state immediately so banner hides
+
+      // Immediately mark connected so banner switches state
       setGoogleConnected(true);
       setGoogleEmail(result.email);
 
-      // Run signal scan — parse Gmail + Calendar for obligations
+      // Background: parse Gmail + Calendar → add obligations to store
       try {
         const scan = await runFullSignalScan(
           result.accessToken,
           obligations.filter(o => o.status !== 'completed'),
         );
-        if (scan.obligations.length > 0) {
-          addObligations(scan.obligations);
-        }
+        if (scan.obligations.length > 0) addObligations(scan.obligations);
         setScanSummary(scan.summary);
-        Alert.alert(
-          'Gmail & Calendar connected ✓',
-          `Signed in as ${result.email}.\n\n${scan.summary}`,
-        );
+        Alert.alert('Connected ✓', `Signed in as ${result.email}.\n\n${scan.summary}`);
       } catch {
-        // Scan failed but auth succeeded — that's fine
-        Alert.alert('Connected ✓', `Gmail connected as ${result.email}. Calendar scan will retry shortly.`);
+        Alert.alert('Connected ✓', `Signed in as ${result.email}.\nInbox scan will run in the background.`);
       }
+    } catch (err: any) {
+      Alert.alert('Error', err?.message ?? 'Something went wrong. Please try again.');
     } finally {
       setGoogleConnecting(false);
     }
@@ -506,48 +529,56 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
           </Animated.View>
         )}
 
-        {/* ── Life Signal Banner — Gmail connect or connected state ─────── */}
-        <Animated.View style={{ opacity: fadeIn }}>
-          {!googleConnected ? (
-            /* Not connected — tap triggers OAuth directly */
+        {/* ── Google Account Card ──────────────────────────────────────────── */}
+        {!googleConnected ? (
+          <Animated.View style={[s.googleCard, { opacity: fadeIn }]}>
+            <Text style={s.googleCardLabel}>CONNECT YOUR ACCOUNTS</Text>
+
+            {/* Official-style Google button */}
             <TouchableOpacity
-              style={s.signalBanner}
+              style={[s.googleBtn, googleConnecting && s.googleBtnDisabled]}
               onPress={handleGoogleConnect}
               disabled={googleConnecting}
-              activeOpacity={0.85}
+              activeOpacity={0.92}
             >
-              {googleConnecting
-                ? <ActivityIndicator color={C.chartreuse} size="small" style={{ width: 28 }} />
-                : <Text style={s.signalEmoji}>⚡</Text>
-              }
-              <View style={{ flex: 1 }}>
-                <Text style={s.signalTitle}>
-                  {googleConnecting ? 'Connecting to Google…' : 'Connect Gmail & Calendar'}
-                </Text>
-                <Text style={s.signalSub}>
-                  {googleConnecting
-                    ? 'Please complete sign-in in the browser'
-                    : 'Let Buddy auto-detect obligations from your inbox'}
-                </Text>
+              {/* G logo box */}
+              <View style={s.googleLogoBox}>
+                {googleConnecting
+                  ? <ActivityIndicator color="#4285F4" size="small" />
+                  : <GoogleLogo />
+                }
               </View>
-              {!googleConnecting && <Text style={{ color: C.chartreuse, fontSize: 18 }}>›</Text>}
+              {/* Divider */}
+              <View style={s.googleBtnDivider} />
+              {/* Label */}
+              <Text style={s.googleBtnLabel}>
+                {googleConnecting ? 'Signing in…' : 'Sign in with Google'}
+              </Text>
             </TouchableOpacity>
-          ) : (
-            /* Connected — show status + tap goes to Profile */
+
+            <Text style={s.googleCardSub}>
+              Read-only access · Gmail & Calendar · Auto-detects upcoming obligations
+            </Text>
+          </Animated.View>
+        ) : (
+          /* Connected state — verdigris success card */
+          <Animated.View style={{ opacity: fadeIn }}>
             <TouchableOpacity
-              style={[s.signalBanner, s.signalBannerConnected]}
+              style={s.googleConnectedCard}
               onPress={() => nav.navigate('connect')}
               activeOpacity={0.85}
             >
-              <Text style={s.signalEmoji}>✓</Text>
+              <View style={s.googleConnectedIcon}>
+                <Text style={{ fontSize: 16 }}>✓</Text>
+              </View>
               <View style={{ flex: 1 }}>
-                <Text style={[s.signalTitle, { color: C.verdigris }]}>Gmail & Calendar connected</Text>
-                <Text style={s.signalSub}>{googleEmail || 'Scanning inbox for obligations'}</Text>
+                <Text style={s.googleConnectedTitle}>Google account connected</Text>
+                <Text style={s.googleConnectedSub}>{googleEmail}</Text>
               </View>
               <View style={s.connectedDot} />
             </TouchableOpacity>
-          )}
-        </Animated.View>
+          </Animated.View>
+        )}
 
         {/* ── Priority Tasks ─────────────────────────────────────────────────── */}
         <Animated.View style={[s.section, { opacity: fadeIn }]}>
@@ -740,18 +771,60 @@ const s = StyleSheet.create({
   briefBannerHeadline: { color: C.white, fontSize: 13, fontWeight: '600', lineHeight: 18 },
   briefBannerArrow:    { color: C.chartreuse, fontSize: 20, fontWeight: '300' },
 
-  // ── Life signal banner
-  signalBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: `${C.chartreuse}10`, borderRadius: 14, padding: 14,
+  // ── Google account card (replaces old signal banner)
+  googleCard: {
     marginHorizontal: 16, marginBottom: 14,
-    borderWidth: 1, borderColor: `${C.chartreuse}28`,
   },
-  signalEmoji:           { fontSize: 20, width: 28, textAlign: 'center' },
-  signalTitle:           { color: C.chartreuse, fontSize: 13, fontWeight: '700', marginBottom: 2 },
-  signalSub:             { color: C.textSec, fontSize: 11 },
-  signalBannerConnected: { borderColor: `${C.verdigris}40`, backgroundColor: `${C.verdigris}0D` },
-  connectedDot:          { width: 8, height: 8, borderRadius: 4, backgroundColor: C.verdigris },
+  googleCardLabel: {
+    color: C.textTer, fontSize: 9, fontWeight: '800', letterSpacing: 2, marginBottom: 8,
+  },
+  // White button — matches Google's official "Sign in with Google" button spec
+  googleBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    height: 48,
+    overflow: 'hidden',
+    // Subtle elevation so it lifts off the dark bg
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18, shadowRadius: 4, elevation: 4,
+  },
+  googleBtnDisabled: { opacity: 0.65 },
+  // Logo box — same height as button, slight right padding for optical balance
+  googleLogoBox: {
+    width: 48, height: 48,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  // 1px vertical divider between logo and label (Google spec)
+  googleBtnDivider: {
+    width: 1, height: 28, backgroundColor: 'rgba(0,0,0,0.12)',
+  },
+  // Label — Roboto Medium, Google's recommended colour on white
+  googleBtnLabel: {
+    flex: 1, textAlign: 'center',
+    color: '#1F1F1F', fontSize: 15, fontWeight: '600',
+    letterSpacing: 0.2, paddingRight: 48, // balance the logo box width
+  },
+  googleCardSub: {
+    color: C.textTer, fontSize: 10, marginTop: 8, textAlign: 'center',
+  },
+  // Connected state
+  googleConnectedCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: `${C.verdigris}0D`,
+    borderRadius: 14, padding: 14,
+    marginHorizontal: 16, marginBottom: 14,
+    borderWidth: 1, borderColor: `${C.verdigris}35`,
+  },
+  googleConnectedIcon: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: `${C.verdigris}22`,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  googleConnectedTitle: { color: C.verdigris, fontSize: 13, fontWeight: '700', marginBottom: 2 },
+  googleConnectedSub:   { color: C.textSec, fontSize: 11 },
+  connectedDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.verdigris },
 
   // ── Tab bar
   tabBar: {
