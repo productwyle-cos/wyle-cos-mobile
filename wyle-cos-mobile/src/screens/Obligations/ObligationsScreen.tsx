@@ -84,6 +84,30 @@ function getDaysLabel(days: number): string {
 // ─────────────────────────────────────────────────────────────────────────────
 const ORB_SIZE = 58;
 
+// Styles used by HologramOrb and TabBar — must be defined BEFORE those components
+// so Hermes (which does not hoist const initialisations) can resolve them at render time.
+const s = StyleSheet.create({
+  // Tab bar
+  tabBar: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#111111',
+    borderTopWidth: 1, borderColor: C.border,
+    paddingBottom: 20, paddingTop: 8, height: 80,
+  },
+  tabItem:  { flex: 1, alignItems: 'center', gap: 3 },
+  tabIcon:  { fontSize: 20, color: C.textTer },
+  tabLabel: { fontSize: 10, color: C.textTer, fontWeight: '500' },
+  tabDot:   { width: 4, height: 4, borderRadius: 2, backgroundColor: C.verdigris, marginTop: 2 },
+  // Hologram orb
+  orbWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: -24 },
+  orb: {
+    width: ORB_SIZE, height: ORB_SIZE, borderRadius: ORB_SIZE / 2,
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  },
+  orbWave:    { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  orbWaveBar: { width: 2.5, backgroundColor: '#FFFFFF', borderRadius: 2, opacity: 0.9 },
+});
+
 function HologramOrb({ onPress }: { onPress: () => void }) {
   const scale = useRef(new Animated.Value(1)).current;
   const tilt  = useRef(new Animated.Value(0)).current;
@@ -1129,3 +1153,4 @@ const bd = StyleSheet.create({
   dupeLabelText:  { color: C.verdigris, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 },
   dupeName:       { flex: 1, color: C.white, fontSize: 12, fontWeight: '600' },
 });
+
