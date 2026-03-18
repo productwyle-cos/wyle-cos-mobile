@@ -23,7 +23,9 @@ import { Platform } from 'react-native';
 
 WebBrowser.maybeCompleteAuthSession();
 
-// ── Client ID ─────────────────────────────────────────────────────────────────
+// ── Client ID & Secret ────────────────────────────────────────────────────────
+// Web Application OAuth clients require client_secret for token exchange.
+// Android/iOS native clients (public clients) do NOT need a secret.
 function getClientId(): string {
   if (Platform.OS === 'android') {
     return process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID
@@ -36,6 +38,12 @@ function getClientId(): string {
         ?? '';
   }
   return process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '';
+}
+
+// Only needed for web (Web Application client type).
+// Not required for Android/iOS native clients.
+function getClientSecret(): string {
+  return process.env.EXPO_PUBLIC_GOOGLE_CLIENT_SECRET ?? '';
 }
 
 // ── Redirect URI ──────────────────────────────────────────────────────────────
@@ -192,17 +200,22 @@ export async function handleGoogleOAuthCallback(): Promise<GoogleAuthResult | nu
   }
 
   try {
-    // Exchange auth code for tokens
+    // Exchange auth code for tokens.
+    // Web Application clients require client_secret; native clients do not.
+    const clientSecret = getClientSecret();
+    const tokenBody: Record<string, string> = {
+      code,
+      client_id:     storedClientId,
+      redirect_uri:  redirectUri,
+      code_verifier: codeVerifier,
+      grant_type:    'authorization_code',
+    };
+    if (clientSecret) tokenBody.client_secret = clientSecret;
+
     const tokenRes = await fetch(discovery.tokenEndpoint, {
       method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id:     storedClientId,
-        redirect_uri:  redirectUri,
-        code_verifier: codeVerifier,
-        grant_type:    'authorization_code',
-      }).toString(),
+      body: new URLSearchParams(tokenBody).toString(),
     });
 
     const data = await tokenRes.json();
@@ -306,14 +319,18 @@ export async function getAccessToken(): Promise<string | null> {
     const clientId = getClientId();
     if (!refresh || !clientId) return null;
 
+    const refreshBody: Record<string, string> = {
+      client_id:     clientId,
+      refresh_token: refresh,
+      grant_type:    'refresh_token',
+    };
+    const clientSecret = getClientSecret();
+    if (clientSecret) refreshBody.client_secret = clientSecret;
+
     const res = await fetch(discovery.tokenEndpoint, {
       method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id:     clientId,
-        refresh_token: refresh,
-        grant_type:    'refresh_token',
-      }).toString(),
+      body: new URLSearchParams(refreshBody).toString(),
     });
     const data = await res.json();
     if (!data.access_token) return null;
