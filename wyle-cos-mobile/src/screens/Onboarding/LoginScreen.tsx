@@ -267,6 +267,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                       placeholder="Mohammed Al-Rashid"
                       placeholderTextColor={C.textTer}
                       autoCapitalize="words"
+                      underlineColorAndroid="transparent"
                     />
                     <MicBtn onTranscript={setName} />
                   </View>
@@ -286,6 +287,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                     autoCapitalize="none"
                     keyboardType="email-address"
                     autoComplete="email"
+                    underlineColorAndroid="transparent"
                   />
                   <MicBtn onTranscript={setEmail} />
                 </View>
@@ -303,6 +305,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                       placeholder="Palm Jumeirah, Dubai"
                       placeholderTextColor={C.textTer}
                       autoCapitalize="words"
+                      underlineColorAndroid="transparent"
                     />
                     <MicBtn onTranscript={setLocation} />
                   </View>
@@ -321,6 +324,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                     placeholderTextColor={C.textTer}
                     secureTextEntry
                     autoComplete="password"
+                    underlineColorAndroid="transparent"
                   />
                 </View>
               </View>
@@ -470,6 +474,7 @@ const styles = StyleSheet.create({
     color: C.white,
     fontSize: 15,
     paddingVertical: 10,
+    backgroundColor: 'transparent', // prevents Android from painting its own white bg on focus
   },
   micBtn: { padding: 6, marginLeft: 4 },
 
