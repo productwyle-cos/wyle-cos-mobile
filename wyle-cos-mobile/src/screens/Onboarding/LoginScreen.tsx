@@ -2,7 +2,7 @@
 // Redesigned to match Wyle brand UI: dark teal→black gradient bg, vector icons, gradient CTA
 // Supports Login / Register toggle + Google Sign-In
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   TextInput, Animated, KeyboardAvoidingView,
@@ -106,6 +106,27 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
   const [error, setError]               = useState('');
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
+
+  // ── Web-only: override browser autofill white background ──────────────────
+  // Browser's -webkit-autofill forces a white fill that can't be beaten with
+  // inline styles alone. The only reliable fix is the inset box-shadow trick.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const styleTag = document.createElement('style');
+    styleTag.innerHTML = `
+      input:-webkit-autofill,
+      input:-webkit-autofill:hover,
+      input:-webkit-autofill:focus,
+      input:-webkit-autofill:active {
+        -webkit-box-shadow: 0 0 0 1000px #0A3D4A inset !important;
+        -webkit-text-fill-color: #FEFFFE !important;
+        caret-color: #FEFFFE !important;
+        transition: background-color 9999s ease-in-out 0s;
+      }
+    `;
+    document.head.appendChild(styleTag);
+    return () => { document.head.removeChild(styleTag); };
+  }, []);
 
   const shake = () => {
     Animated.sequence([
