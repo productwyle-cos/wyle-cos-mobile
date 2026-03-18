@@ -57,15 +57,43 @@ const MOCK_STATS = {
 };
 
 // ── Derive a "Ready to Execute" item from a real obligation ───────────────────
-// ── Google four-colour logo mark ─────────────────────────────────────────────
+// ── Official Google "G" mark ─────────────────────────────────────────────────
+// 4-colour ring (blue/red/yellow/green) with white inner fill + crossbar = G shape
 function GoogleLogo() {
+  const S   = 22;
+  const T   = 3.5;
+  const MID = S / 2;
   return (
-    <View style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
-      <View style={{ position: 'absolute', top: 0,    left: 0,  width: 10, height: 10, borderTopLeftRadius: 10,     backgroundColor: '#EA4335' }} />
-      <View style={{ position: 'absolute', top: 0,    right: 0, width: 10, height: 10, borderTopRightRadius: 10,    backgroundColor: '#4285F4' }} />
-      <View style={{ position: 'absolute', bottom: 0, left: 0,  width: 10, height: 10, borderBottomLeftRadius: 10,  backgroundColor: '#FBBC05' }} />
-      <View style={{ position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderBottomRightRadius: 10, backgroundColor: '#34A853' }} />
-      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFFFFF', zIndex: 2 }} />
+    <View style={{ width: S, height: S }}>
+      {/* 4-colour ring */}
+      <View style={{
+        position: 'absolute', width: S, height: S,
+        borderRadius: MID, borderWidth: T,
+        borderTopColor:    '#4285F4',
+        borderRightColor:  '#EA4335',
+        borderBottomColor: '#FBBC05',
+        borderLeftColor:   '#34A853',
+      }} />
+      {/* White inner fill */}
+      <View style={{
+        position: 'absolute', top: T, left: T,
+        width: S - T * 2, height: S - T * 2,
+        borderRadius: (S - T * 2) / 2,
+        backgroundColor: '#FFFFFF',
+      }} />
+      {/* White mask — opens right side to create G gap */}
+      <View style={{
+        position: 'absolute', right: 0,
+        top: MID - T - 1, width: MID + 2, height: T * 2 + 2,
+        backgroundColor: '#FFFFFF',
+      }} />
+      {/* Blue crossbar */}
+      <View style={{
+        position: 'absolute',
+        left: MID - 1, right: 0,
+        top: MID - T / 2, height: T,
+        backgroundColor: '#4285F4',
+      }} />
     </View>
   );
 }
