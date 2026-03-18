@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { SvgXml } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
@@ -57,45 +58,28 @@ const MOCK_STATS = {
 };
 
 // ── Derive a "Ready to Execute" item from a real obligation ───────────────────
-// ── Official Google "G" mark ─────────────────────────────────────────────────
-// 4-colour ring (blue/red/yellow/green) with white inner fill + crossbar = G shape
+// ── Official Google "G" — exact SVG paths from Google's brand assets ─────────
+const GOOGLE_G_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 533.5 544.3">
+  <path fill="#4285F4"
+    d="M533.5 278.4c0-18.5-1.5-37.1-4.7-55.3H272.1v104.8h147
+       c-6.1 33.8-25.7 63.7-54.4 82.7v68h87.7
+       c51.5-47.4 81.1-117.4 81.1-200.2z"/>
+  <path fill="#34A853"
+    d="M272.1 544.3c73.4 0 135.3-24.1 180.4-65.7l-87.7-68
+       c-24.4 16.6-55.9 26-92.6 26-71 0-131.2-47.9-152.8-112.3H28.9v70.1
+       c46.2 91.9 140.3 149.9 243.2 149.9z"/>
+  <path fill="#FBBC05"
+    d="M119.3 324.3c-11.4-33.8-11.4-70.4 0-104.2V150H28.9
+       c-38.6 76.9-38.6 167.5 0 244.4l90.4-70.1z"/>
+  <path fill="#EA4335"
+    d="M272.1 107.7c38.8-.6 76.3 14 104.4 40.8l77.7-77.7
+       C405 24.6 339.7-.8 272.1 0 169.2 0 75.1 58 28.9 150l90.4 70.1
+       c21.5-64.5 81.8-112.4 152.8-112.4z"/>
+</svg>`;
+
 function GoogleLogo() {
-  const S   = 22;
-  const T   = 3.5;
-  const MID = S / 2;
-  return (
-    <View style={{ width: S, height: S }}>
-      {/* 4-colour ring */}
-      <View style={{
-        position: 'absolute', width: S, height: S,
-        borderRadius: MID, borderWidth: T,
-        borderTopColor:    '#4285F4',
-        borderRightColor:  '#EA4335',
-        borderBottomColor: '#FBBC05',
-        borderLeftColor:   '#34A853',
-      }} />
-      {/* White inner fill */}
-      <View style={{
-        position: 'absolute', top: T, left: T,
-        width: S - T * 2, height: S - T * 2,
-        borderRadius: (S - T * 2) / 2,
-        backgroundColor: '#FFFFFF',
-      }} />
-      {/* White mask — opens right side to create G gap */}
-      <View style={{
-        position: 'absolute', right: 0,
-        top: MID - T - 1, width: MID + 2, height: T * 2 + 2,
-        backgroundColor: '#FFFFFF',
-      }} />
-      {/* Blue crossbar */}
-      <View style={{
-        position: 'absolute',
-        left: MID - 1, right: 0,
-        top: MID - T / 2, height: T,
-        backgroundColor: '#4285F4',
-      }} />
-    </View>
-  );
+  return <SvgXml xml={GOOGLE_G_SVG} width={22} height={22} />;
 }
 
 function toExecuteItem(ob: UIObligation) {
