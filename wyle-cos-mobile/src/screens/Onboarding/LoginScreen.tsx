@@ -1,5 +1,5 @@
 // src/screens/Onboarding/LoginScreen.tsx
-// Redesigned to match Wyle brand UI: dark teal, pill inputs with icons + mic, gradient CTA
+// Redesigned to match Wyle brand UI: dark teal→black gradient bg, vector icons, gradient CTA
 // Supports Login / Register toggle + Google Sign-In
 
 import React, { useState, useRef } from 'react';
@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { VoiceService } from '@services/voiceService';
 import type { NavProp } from '../../../app/index';
@@ -35,16 +36,14 @@ const USE_REAL_API = false;
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 
 // ── Official Google "G" mark ─────────────────────────────────────────────────
-// Approximates the 4-colour Google G ring using React Native border segments.
-// Button bg is white (#FFF), so white masks blend seamlessly.
+// 4-colour ring (blue/red/yellow/green) with white inner fill + crossbar = G shape
 function GoogleG() {
-  const S   = 22;    // icon size
-  const T   = 3.5;   // stroke thickness
-  const MID = S / 2; // 11 — centre point
-
+  const S   = 22;
+  const T   = 3.5;
+  const MID = S / 2;
   return (
     <View style={{ width: S, height: S }}>
-      {/* 1. 4-colour ring: blue top, red right, yellow bottom, green left */}
+      {/* 4-colour ring */}
       <View style={{
         position: 'absolute', width: S, height: S,
         borderRadius: MID, borderWidth: T,
@@ -53,23 +52,20 @@ function GoogleG() {
         borderBottomColor: '#FBBC05',
         borderLeftColor:   '#34A853',
       }} />
-
-      {/* 2. White inner fill → turns solid disc into a hollow ring */}
+      {/* White inner fill */}
       <View style={{
         position: 'absolute', top: T, left: T,
         width: S - T * 2, height: S - T * 2,
         borderRadius: (S - T * 2) / 2,
         backgroundColor: '#FFFFFF',
       }} />
-
-      {/* 3. White mask → opens the right side to form the "gap" of the G */}
+      {/* White mask — opens right side to create G gap */}
       <View style={{
         position: 'absolute', right: 0,
         top: MID - T - 1, width: MID + 2, height: T * 2 + 2,
         backgroundColor: '#FFFFFF',
       }} />
-
-      {/* 4. Blue crossbar → the horizontal bar that makes it a G not a C */}
+      {/* Blue crossbar */}
       <View style={{
         position: 'absolute',
         left: MID - 1, right: 0,
@@ -78,6 +74,12 @@ function GoogleG() {
       }} />
     </View>
   );
+}
+
+// ── Field icon — Ionicons vector (professional, no emoji) ────────────────────
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+function FieldIcon({ name }: { name: IoniconName }) {
+  return <Ionicons name={name} size={18} color={C.verdigris} style={{ marginRight: 10 }} />;
 }
 
 // ── Mic button inside a field ─────────────────────────────────────────────────
@@ -99,9 +101,11 @@ function MicBtn({ onTranscript }: { onTranscript: (t: string) => void }) {
 
   return (
     <TouchableOpacity onPress={toggle} style={styles.micBtn} activeOpacity={0.7}>
-      <Text style={[styles.micIcon, active && { color: C.chartreuse }]}>
-        {active ? '🔴' : '🎤'}
-      </Text>
+      <Ionicons
+        name={active ? 'mic' : 'mic-outline'}
+        size={18}
+        color={active ? C.chartreuse : C.textTer}
+      />
     </TouchableOpacity>
   );
 }
@@ -113,9 +117,9 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
   const [email, setEmail]       = useState('');
   const [location, setLocation] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading]         = useState(false);
+  const [loading, setLoading]           = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const [error, setError]             = useState('');
+  const [error, setError]               = useState('');
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
@@ -175,7 +179,6 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
       Alert.alert('Not supported', 'Google Sign-In is available on the mobile app only.');
       return;
     }
-    // Guard: check that a Google client ID has been configured
     const clientIdSet = !!(
       process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID ||
       process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS     ||
@@ -213,8 +216,14 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
   const isRegister = mode === 'register';
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+    // ── Background: teal at top → pure black at bottom ──────────────────────
+    <LinearGradient
+      colors={['#002F3A', '#001820', '#000000']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 0, y: 1 }}
+      style={styles.container}
+    >
+      <StatusBar barStyle="light-content" backgroundColor="#002F3A" />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <SafeAreaView>
@@ -222,7 +231,24 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
             {/* ── Header ─────────────────────────────────────────────────── */}
             <View style={styles.header}>
               <Text style={styles.logo}>WYLE</Text>
+
+              {/* Shining gradient underline below WYLE */}
+              <LinearGradient
+                colors={['transparent', C.verdigris, C.chartreuse, C.verdigris, 'transparent']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.logoUnderline}
+              />
+
               <Text style={styles.tagline}>DIGITAL CHIEF OF STAFF</Text>
+
+              {/* Subtle second underline below tagline */}
+              <LinearGradient
+                colors={['transparent', C.textTer, 'transparent']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.taglineUnderline}
+              />
             </View>
 
             {/* ── Headline ───────────────────────────────────────────────── */}
@@ -257,6 +283,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>FULL NAME</Text>
                   <View style={styles.inputRow}>
+                    <FieldIcon name="person-outline" />
                     <TextInput
                       style={styles.input}
                       value={name}
@@ -273,6 +300,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>EMAIL ADDRESS</Text>
                 <View style={styles.inputRow}>
+                  <FieldIcon name="mail-outline" />
                   <TextInput
                     style={styles.input}
                     value={email}
@@ -291,6 +319,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>LOCATION</Text>
                   <View style={styles.inputRow}>
+                    <FieldIcon name="location-outline" />
                     <TextInput
                       style={styles.input}
                       value={location}
@@ -307,6 +336,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>PASSWORD</Text>
                 <View style={styles.inputRow}>
+                  <FieldIcon name="lock-closed-outline" />
                   <TextInput
                     style={styles.input}
                     value={password}
@@ -326,7 +356,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                 </View>
               )}
 
-              {/* ── Primary CTA ─────────────────────────────────────────── */}
+              {/* ── Primary CTA — green → yellow gradient ───────────────── */}
               <TouchableOpacity
                 onPress={handleSubmit}
                 disabled={loading}
@@ -334,7 +364,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                 style={{ marginTop: 8 }}
               >
                 <LinearGradient
-                  colors={[C.chartreuse, C.chartreuseB]}
+                  colors={[C.verdigris, C.chartreuse]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
                   style={[styles.submitBtn, loading && { opacity: 0.6 }]}
@@ -366,9 +396,7 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                   <ActivityIndicator color="#1F1F1F" size="small" />
                 ) : (
                   <>
-                    {/* Official Google G mark */}
                     <GoogleG />
-                    {/* 1 px vertical divider — Google spec */}
                     <View style={styles.googleDivider} />
                     <Text style={styles.googleText}>Sign in with Google</Text>
                   </>
@@ -385,18 +413,49 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
           </SafeAreaView>
         </ScrollView>
       </KeyboardAvoidingView>
-    </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: C.bg },
+  // ── Full-screen gradient container (no backgroundColor — LinearGradient handles it)
+  container: { flex: 1 },
   scroll:    { padding: 28, paddingBottom: 48 },
 
   // ── Header
-  header:  { alignItems: 'center', marginTop: 16, marginBottom: 32 },
-  logo:    { fontSize: 42, fontWeight: '900', color: C.white, letterSpacing: 10 },
-  tagline: { fontSize: 11, fontWeight: '600', color: C.textSec, letterSpacing: 4, marginTop: 4 },
+  header: { alignItems: 'center', marginTop: 16, marginBottom: 32 },
+  logo: {
+    fontSize: 42,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 10,
+    // Subtle glow shadow on the WYLE wordmark
+    textShadowColor: C.verdigris,
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 12,
+  },
+  // Shining gradient line immediately under WYLE
+  logoUnderline: {
+    height: 2,
+    width: 100,
+    marginTop: 6,
+    marginBottom: 10,
+    borderRadius: 1,
+  },
+  tagline: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: C.textSec,
+    letterSpacing: 4,
+  },
+  // Subtle dimmer line under DIGITAL CHIEF OF STAFF
+  taglineUnderline: {
+    height: 1,
+    width: 160,
+    marginTop: 6,
+    borderRadius: 1,
+    opacity: 0.5,
+  },
 
   // ── Headline
   headline: { fontSize: 28, fontWeight: '800', color: C.white, textAlign: 'center', marginBottom: 8 },
@@ -444,8 +503,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     paddingVertical: 10,
   },
-  micBtn:  { padding: 6, marginLeft: 4 },
-  micIcon: { fontSize: 16, color: C.textTer },
+  micBtn: { padding: 6, marginLeft: 4 },
 
   // ── Error
   errorBox: {
@@ -457,21 +515,21 @@ const styles = StyleSheet.create({
   },
   errorText: { color: C.crimson, fontSize: 13 },
 
-  // ── Submit button
+  // ── Submit button (green → yellow)
   submitBtn: {
     borderRadius: 999,
     paddingVertical: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submitText: { color: C.bg, fontSize: 16, fontWeight: '800', letterSpacing: 0.3 },
+  submitText: { color: '#001A20', fontSize: 16, fontWeight: '800', letterSpacing: 0.3 },
 
   // ── Divider
   divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 4 },
   dividerLine: { flex: 1, height: 1, backgroundColor: C.border },
   dividerText: { color: C.textTer, fontSize: 13 },
 
-  // ── Google button  (Google brand spec: white bg, #1F1F1F label, 1px border)
+  // ── Google button (Google brand spec: white bg, #1F1F1F label, 1px border)
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -482,7 +540,6 @@ const styles = StyleSheet.create({
     gap: 12,
     borderWidth: 1,
     borderColor: '#E0E0E0',
-    // shadow for depth on the dark bg
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.18,
