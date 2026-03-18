@@ -16,7 +16,7 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { UIObligation } from '../../types';
 import { generateBrief, getBriefKey, getBriefTimeOfDay, isBriefStale } from '../../services/briefService';
-import { signInWithGoogle, isGoogleConnected } from '../../services/googleAuthService';
+import { signInWithGoogle, isGoogleConnected, handleGoogleOAuthCallback } from '../../services/googleAuthService';
 import { runFullSignalScan } from '../../services/signalService';
 
 const { width } = Dimensions.get('window');
@@ -370,9 +370,34 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       }
     });
 
-    // Check if Google was already connected (works on web + native)
-    isGoogleConnected().then(({ connected, email }) => {
-      if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
+    // ── Web: complete OAuth redirect callback (if returning from Google) ──────
+    // Must run BEFORE isGoogleConnected so the new token is in storage first.
+    handleGoogleOAuthCallback().then(async callbackResult => {
+      if (callbackResult && callbackResult.success === true) {
+        setGoogleConnected(true);
+        setGoogleEmail(callbackResult.email);
+        // Background inbox/calendar scan
+        try {
+          const scan = await runFullSignalScan(
+            callbackResult.accessToken,
+            useAppStore.getState().obligations.filter(o => o.status !== 'completed'),
+          );
+          if (scan.obligations.length > 0) {
+            useAppStore.getState().addObligations(scan.obligations);
+          }
+          setScanSummary(scan.summary);
+          Alert.alert('Connected ✓', `Signed in as ${callbackResult.email}.\n\n${scan.summary}`);
+        } catch {
+          Alert.alert('Connected ✓', `Signed in as ${callbackResult.email}.\nCalendar & Gmail synced.`);
+        }
+      } else if (callbackResult && callbackResult.success === false) {
+        Alert.alert('Sign-in failed', callbackResult.error);
+      }
+
+      // Always re-check stored token after potential callback
+      isGoogleConnected().then(({ connected, email }) => {
+        if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
+      });
     });
 
     // Update clock every minute
@@ -419,6 +444,10 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
     setScanSummary(null);
     try {
       const result = await signInWithGoogle();
+
+      // Web: page is navigating to Google — button stays in loading state until redirect
+      if (result.success === 'redirect') return;
+
       if (!result.success) {
         if (result.error !== 'Cancelled') {
           Alert.alert('Sign-in failed', result.error || 'Could not connect to Google.');
@@ -426,7 +455,7 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
         return;
       }
 
-      // Immediately mark connected so banner switches state
+      // Native: OAuth popup completed — mark connected immediately
       setGoogleConnected(true);
       setGoogleEmail(result.email);
 
