@@ -35,12 +35,48 @@ const USE_REAL_API = false;
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 
 // ── Official Google "G" mark ─────────────────────────────────────────────────
-// Renders the recognisable bold blue "G" used in Google's own Sign-in button
+// Approximates the 4-colour Google G ring using React Native border segments.
+// Button bg is white (#FFF), so white masks blend seamlessly.
 function GoogleG() {
+  const S   = 22;    // icon size
+  const T   = 3.5;   // stroke thickness
+  const MID = S / 2; // 11 — centre point
+
   return (
-    <Text style={{ fontSize: 18, fontWeight: '700', color: '#4285F4', fontFamily: 'System', lineHeight: 22 }}>
-      G
-    </Text>
+    <View style={{ width: S, height: S }}>
+      {/* 1. 4-colour ring: blue top, red right, yellow bottom, green left */}
+      <View style={{
+        position: 'absolute', width: S, height: S,
+        borderRadius: MID, borderWidth: T,
+        borderTopColor:    '#4285F4',
+        borderRightColor:  '#EA4335',
+        borderBottomColor: '#FBBC05',
+        borderLeftColor:   '#34A853',
+      }} />
+
+      {/* 2. White inner fill → turns solid disc into a hollow ring */}
+      <View style={{
+        position: 'absolute', top: T, left: T,
+        width: S - T * 2, height: S - T * 2,
+        borderRadius: (S - T * 2) / 2,
+        backgroundColor: '#FFFFFF',
+      }} />
+
+      {/* 3. White mask → opens the right side to form the "gap" of the G */}
+      <View style={{
+        position: 'absolute', right: 0,
+        top: MID - T - 1, width: MID + 2, height: T * 2 + 2,
+        backgroundColor: '#FFFFFF',
+      }} />
+
+      {/* 4. Blue crossbar → the horizontal bar that makes it a G not a C */}
+      <View style={{
+        position: 'absolute',
+        left: MID - 1, right: 0,
+        top: MID - T / 2, height: T,
+        backgroundColor: '#4285F4',
+      }} />
+    </View>
   );
 }
 
