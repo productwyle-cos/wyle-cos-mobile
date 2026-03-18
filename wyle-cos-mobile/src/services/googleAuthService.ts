@@ -24,15 +24,18 @@ function getClientId(): string {
         ?? process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID
         ?? '';
   }
-  // web — returns empty, signInWithGoogle exits early
+  // web — use the Web Application client ID
   return process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '';
 }
 
 // expo-auth-session v7 (SDK 54+) removed the auth.expo.io proxy.
-// makeRedirectUri() returns:
-//   - Expo Go (tunnel): exp://xxx.exp.direct  → register in Google Cloud Console each session
-//   - Standalone APK:   com.wyle.cos://       → registered once in Android OAuth client
+// On web: returns window.location.origin (e.g. https://xxx.app.github.dev)
+//         → must be added as an Authorised Redirect URI in Google Cloud Console
+// On native: returns the app scheme URI (com.wyle.cos://)
 export function getOAuthRedirectUri(): string {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return window.location.origin;
+  }
   return AuthSession.makeRedirectUri({ scheme: 'com.wyle.cos' });
 }
 
@@ -88,9 +91,6 @@ const discovery = {
 
 // ── Sign in with Google ────────────────────────────────────────────────────────
 export async function signInWithGoogle(): Promise<GoogleAuthResult> {
-  if (Platform.OS === 'web') {
-    return { success: false, error: 'web' }; // ConnectScreen handles this case
-  }
   const clientId = getClientId();
   if (!clientId) {
     return { success: false, error: 'Google Client ID not set in .env' };

@@ -180,17 +180,14 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
   };
 
   const handleGoogle = async () => {
-    if (Platform.OS === 'web') {
-      Alert.alert('Not supported', 'Google Sign-In is available on the mobile app only.');
-      return;
-    }
+    // Use web client ID on browser, platform-specific IDs on native
     const clientIdSet = !!(
-      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID ||
-      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS     ||
-      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID
+      (Platform.OS === 'web'     && process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID) ||
+      (Platform.OS === 'android' && (process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID || process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID)) ||
+      (Platform.OS === 'ios'     && (process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS     || process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID))
     );
     if (!clientIdSet) {
-      Alert.alert('Setup required', 'Google Client ID is not configured. Add EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID to your .env file.');
+      Alert.alert('Setup required', 'Add EXPO_PUBLIC_GOOGLE_CLIENT_ID (web) or platform-specific IDs to your .env file.');
       return;
     }
 

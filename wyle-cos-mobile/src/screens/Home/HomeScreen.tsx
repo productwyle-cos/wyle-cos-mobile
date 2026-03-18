@@ -403,22 +403,16 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
 
   // ── Google OAuth connect ──────────────────────────────────────────────────
   const handleGoogleConnect = async () => {
-    if (Platform.OS === 'web') {
-      Alert.alert('Not available on web', 'Google sign-in works on the Android and iOS apps.');
-      return;
-    }
-
-    // Guard: credentials not configured yet
+    // On web use EXPO_PUBLIC_GOOGLE_CLIENT_ID; on native use platform-specific IDs
     const clientIdSet = !!(
-      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID ||
-      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS     ||
-      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID
+      (Platform.OS === 'web'     && process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID) ||
+      (Platform.OS === 'android' && (process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID || process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID)) ||
+      (Platform.OS === 'ios'     && (process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS     || process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID))
     );
     if (!clientIdSet) {
       Alert.alert(
         'Setup required',
-        'Google Client ID is not configured.\n\n' +
-        'Add EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID to your .env and rebuild the app.',
+        'Google Client ID is not configured.\n\nAdd EXPO_PUBLIC_GOOGLE_CLIENT_ID to your .env file.',
       );
       return;
     }
