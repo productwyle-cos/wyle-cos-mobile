@@ -34,27 +34,14 @@ const C = {
 const USE_REAL_API = false;
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
 
-// ── Google four-colour logo mark ─────────────────────────────────────────────
-function GoogleLogo() {
+// ── Official Google "G" mark ─────────────────────────────────────────────────
+// Renders the recognisable bold blue "G" used in Google's own Sign-in button
+function GoogleG() {
   return (
-    <View style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
-      {/* Top-left: red */}
-      <View style={{ position: 'absolute', top: 0, left: 0, width: 10, height: 10, borderTopLeftRadius: 10, backgroundColor: '#EA4335' }} />
-      {/* Top-right: blue */}
-      <View style={{ position: 'absolute', top: 0, right: 0, width: 10, height: 10, borderTopRightRadius: 10, backgroundColor: '#4285F4' }} />
-      {/* Bottom-left: yellow */}
-      <View style={{ position: 'absolute', bottom: 0, left: 0, width: 10, height: 10, borderBottomLeftRadius: 10, backgroundColor: '#FBBC05' }} />
-      {/* Bottom-right: green */}
-      <View style={{ position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderBottomRightRadius: 10, backgroundColor: '#34A853' }} />
-      {/* Centre cutout */}
-      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFFFFF', zIndex: 2 }} />
-    </View>
+    <Text style={{ fontSize: 18, fontWeight: '700', color: '#4285F4', fontFamily: 'System', lineHeight: 22 }}>
+      G
+    </Text>
   );
-}
-
-// ── Field icon (emoji fallback — no extra package needed) ────────────────────
-function FieldIcon({ icon }: { icon: string }) {
-  return <Text style={styles.fieldIcon}>{icon}</Text>;
 }
 
 // ── Mic button inside a field ─────────────────────────────────────────────────
@@ -234,7 +221,6 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>FULL NAME</Text>
                   <View style={styles.inputRow}>
-                    <FieldIcon icon="👤" />
                     <TextInput
                       style={styles.input}
                       value={name}
@@ -251,7 +237,6 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>EMAIL ADDRESS</Text>
                 <View style={styles.inputRow}>
-                  <FieldIcon icon="✉️" />
                   <TextInput
                     style={styles.input}
                     value={email}
@@ -270,7 +255,6 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>LOCATION</Text>
                   <View style={styles.inputRow}>
-                    <FieldIcon icon="📍" />
                     <TextInput
                       style={styles.input}
                       value={location}
@@ -287,7 +271,6 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>PASSWORD</Text>
                 <View style={styles.inputRow}>
-                  <FieldIcon icon="🔒" />
                   <TextInput
                     style={styles.input}
                     value={password}
@@ -305,13 +288,6 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                 <View style={styles.errorBox}>
                   <Text style={styles.errorText}>⚠️ {error}</Text>
                 </View>
-              )}
-
-              {/* Demo badge */}
-              {!USE_REAL_API && (
-                <Text style={styles.demoText}>
-                  🎭 Demo — any email + password works
-                </Text>
               )}
 
               {/* ── Primary CTA ─────────────────────────────────────────── */}
@@ -354,8 +330,8 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
                   <ActivityIndicator color="#1F1F1F" size="small" />
                 ) : (
                   <>
-                    {/* Google logo */}
-                    <GoogleLogo />
+                    {/* Official Google G mark */}
+                    <GoogleG />
                     {/* 1 px vertical divider — Google spec */}
                     <View style={styles.googleDivider} />
                     <Text style={styles.googleText}>Sign in with Google</Text>
@@ -426,7 +402,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     minHeight: 56,
   },
-  fieldIcon: { fontSize: 18, marginRight: 10 },
   input: {
     flex: 1,
     color: C.white,
@@ -445,9 +420,6 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   errorText: { color: C.crimson, fontSize: 13 },
-
-  // ── Demo
-  demoText: { color: C.salmon, fontSize: 12, textAlign: 'center', opacity: 0.8 },
 
   // ── Submit button
   submitBtn: {
