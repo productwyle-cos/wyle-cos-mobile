@@ -11,7 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Speech from 'expo-speech';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
-import { checkTimeConflicts, CalendarEvent, fmtTime, fmtDate } from '../../services/calendarService';
+import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate } from '../../services/calendarService';
 import type { NavProp } from '../../../app/index';
 
 const C = {
@@ -32,6 +32,12 @@ const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 
 type VoiceState = 'idle' | 'recording' | 'transcribing' | 'parsing' | 'done' | 'error';
 type Risk = 'high' | 'medium' | 'low';
+
+type VoiceMode = 'task_creation' | 'calendar_query';
+
+type ParsedResponse =
+  | { intent: 'tasks'; items: ParsedObligation[] }
+  | { intent: 'calendar_query'; start: string; end: string; label: string };
 
 type ParsedObligation = {
   _id: string;
@@ -128,8 +134,33 @@ Saturday = 2026-03-21, daysUntil = 2, scheduledTime = "2026-03-21T09:30:00"
   }
 ]
 
-If nothing actionable is mentioned, return an empty array: []
-Return ONLY the JSON array. No other text.`;
+=== DUAL INTENT DETECTION ===
+You must detect whether the user is CREATING tasks OR QUERYING their calendar.
+
+INTENT: "tasks" — user is creating/adding tasks, obligations, reminders
+  Return: {"intent": "tasks", "items": [...obligation objects...]}
+  If nothing actionable: {"intent": "tasks", "items": []}
+
+INTENT: "calendar_query" — user is ASKING about their schedule, meetings, or events
+  Triggered by phrases like:
+  - "what meetings do I have next week / tomorrow / on Saturday"
+  - "tell me my schedule for..."
+  - "do I have anything on Monday"
+  - "show me meetings on March 21st"
+  - "what's on my calendar"
+  - "list my meetings"
+  Return: {"intent": "calendar_query", "start": "<ISO datetime>", "end": "<ISO datetime>", "label": "<human period>"}
+  Where:
+  - start = beginning of queried period (start of day: T00:00:00)
+  - end   = end of queried period (end of day: T23:59:59, or end of week)
+  - label = short human description e.g. "Saturday, Mar 21", "next week", "tomorrow"
+
+  Examples using today = ${todayISO}:
+  - "meetings next week" → {"intent":"calendar_query","start":"${yyyy}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()+1).padStart(2,'0')}T00:00:00","end":"${yyyy}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()+7).padStart(2,'0')}T23:59:59","label":"next 7 days"}
+  - "meetings on Saturday" → {"intent":"calendar_query","start":"2026-03-21T00:00:00","end":"2026-03-21T23:59:59","label":"Saturday, Mar 21"}
+  - "meetings tomorrow" → compute tomorrow from UPCOMING DATES table
+
+Return ONLY valid JSON. No other text.`;
 }
 
 // ── Waveform animation ────────────────────────────────────────────────────────
@@ -251,17 +282,66 @@ const op = StyleSheet.create({
   conflictDetail: { color: `${C.crimson}CC`, fontSize: 11, lineHeight: 16 },
 });
 
+// ── Calendar event card (for query results) ───────────────────────────────────
+function CalendarEventCard({ event }: { event: CalendarEvent }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }).start();
+  }, []);
+
+  return (
+    <Animated.View style={{ opacity: fadeAnim, marginBottom: 8 }}>
+      <View style={ce.card}>
+        <View style={ce.timeCol}>
+          {event.isAllDay ? (
+            <Text style={ce.allDay}>ALL DAY</Text>
+          ) : (
+            <>
+              <Text style={ce.time}>{fmtTime(event.startTime)}</Text>
+              <Text style={ce.timeSep}>–</Text>
+              <Text style={ce.time}>{fmtTime(event.endTime)}</Text>
+            </>
+          )}
+        </View>
+        <View style={ce.divider} />
+        <View style={{ flex: 1 }}>
+          <Text style={ce.title}>{event.title}</Text>
+          {!!event.location  && <Text style={ce.sub}>📍 {event.location}</Text>}
+          {!!event.meetLink  && <Text style={ce.sub}>📹 Google Meet</Text>}
+          {event.attendees.length > 0 && (
+            <Text style={ce.sub}>👥 {event.attendees.slice(0, 2).join(', ')}{event.attendees.length > 2 ? ` +${event.attendees.length - 2}` : ''}</Text>
+          )}
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+const ce = StyleSheet.create({
+  card:    { backgroundColor: C.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderWidth: 1, borderColor: C.border, borderLeftWidth: 3, borderLeftColor: C.verdigris },
+  timeCol: { alignItems: 'center', minWidth: 64 },
+  time:    { color: C.textSec, fontSize: 11, fontWeight: '600' },
+  timeSep: { color: C.textTer, fontSize: 10 },
+  allDay:  { color: C.verdigris, fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  divider: { width: 1, alignSelf: 'stretch', backgroundColor: C.border, marginHorizontal: 2 },
+  title:   { color: C.white, fontSize: 14, fontWeight: '600', marginBottom: 4 },
+  sub:     { color: C.textTer, fontSize: 11, marginTop: 1 },
+});
+
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function BrainDumpScreen({ navigation }: { navigation: NavProp }) {
   const nav = navigation ?? { navigate: (_: any) => {}, goBack: () => {} };
   const addObligations = useAppStore(s => s.addObligations);
 
-  const [voiceState, setVoiceState]     = useState<VoiceState>('idle');
-  const [transcript, setTranscript]     = useState('');
-  const [parsed, setParsed]             = useState<ParsedObligation[]>([]);
-  const [conflicts, setConflicts]       = useState<Record<string, CalendarEvent[]>>({});
-  const [savedCount, setSavedCount]     = useState(0);
-  const [tipIndex, setTipIndex]         = useState(0);
+  const [voiceState, setVoiceState]         = useState<VoiceState>('idle');
+  const [voiceMode, setVoiceMode]           = useState<VoiceMode>('task_creation');
+  const [transcript, setTranscript]         = useState('');
+  const [parsed, setParsed]                 = useState<ParsedObligation[]>([]);
+  const [conflicts, setConflicts]           = useState<Record<string, CalendarEvent[]>>({});
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [calendarQueryLabel, setCalendarQueryLabel] = useState('');
+  const [savedCount, setSavedCount]         = useState(0);
+  const [tipIndex, setTipIndex]             = useState(0);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim  = useRef(new Animated.Value(0)).current;
@@ -352,10 +432,37 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || 'API error');
 
-      const raw   = data.content?.[0]?.text ?? '[]';
+      const raw   = data.content?.[0]?.text ?? '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
-      const items: ParsedObligation[] = JSON.parse(clean);
+      const parsed_json = JSON.parse(clean);
 
+      // Support both new {intent, items} format and legacy plain array
+      const response: ParsedResponse = Array.isArray(parsed_json)
+        ? { intent: 'tasks', items: parsed_json }
+        : parsed_json;
+
+      // ── Calendar query mode ─────────────────────────────────────────────────
+      if (response.intent === 'calendar_query') {
+        setVoiceMode('calendar_query');
+        setCalendarQueryLabel(response.label);
+        const start  = new Date(response.start);
+        const end    = new Date(response.end);
+        const result = await fetchEventsForDateRange(start, end);
+        setCalendarEvents(result.events);
+        setVoiceState('done');
+        const n = result.events.length;
+        Speech.speak(
+          n > 0
+            ? `You have ${n} ${n === 1 ? 'meeting' : 'meetings'} for ${response.label}.`
+            : `No meetings found for ${response.label}.`,
+          { language: 'en-US', rate: 0.95 },
+        );
+        return;
+      }
+
+      // ── Task creation mode ──────────────────────────────────────────────────
+      setVoiceMode('task_creation');
+      const items: ParsedObligation[] = response.items;
       if (!Array.isArray(items)) throw new Error('Invalid response');
 
       // Give each a unique _id using timestamp
@@ -371,7 +478,6 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
           if (!item.scheduledTime) return;
           try {
             const start = new Date(item.scheduledTime);
-            // Default slot = 1 hour; skip if invalid date
             if (isNaN(start.getTime())) return;
             const end = new Date(start.getTime() + 60 * 60 * 1000);
             const clashing = await checkTimeConflicts(start, end);
@@ -416,8 +522,11 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
   const handleDiscard = () => {
     setParsed([]);
     setConflicts({});
+    setCalendarEvents([]);
+    setCalendarQueryLabel('');
     setTranscript('');
     setVoiceState('idle');
+    setVoiceMode('task_creation');
     setSavedCount(0);
   };
 
@@ -428,7 +537,9 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       case 'recording':     return RECORDING_TIPS[tipIndex];
       case 'transcribing':  return 'Processing your voice...';
       case 'parsing':       return 'Buddy is structuring your tasks...';
-      case 'done':          return `Found ${parsed.length} ${parsed.length === 1 ? 'task' : 'tasks'} — review below`;
+      case 'done':          return voiceMode === 'calendar_query'
+        ? `Found ${calendarEvents.length} ${calendarEvents.length === 1 ? 'meeting' : 'meetings'} — see below`
+        : `Found ${parsed.length} ${parsed.length === 1 ? 'task' : 'tasks'} — review below`;
       case 'error':         return 'Could not process. Try again.';
     }
   };
@@ -496,11 +607,12 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
           </View>
         )}
 
-        {/* Parsed results */}
-        {parsed.length > 0 && (
+        {/* Parsed results — task creation mode */}
+        {voiceMode === 'task_creation' && parsed.length > 0 && (
           <View style={s.resultsBlock}>
             <Text style={s.resultsLabel}>
               BUDDY FOUND {parsed.length} {parsed.length === 1 ? 'TASK' : 'TASKS'}
+              {Object.keys(conflicts).length > 0 && ` · ⚠️ ${Object.keys(conflicts).length} CONFLICT`}
             </Text>
             {parsed.map(item => (
               <ObligationPreview
@@ -525,6 +637,28 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
             </TouchableOpacity>
             <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
               <Text style={s.discardBtnText}>Discard & try again</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Calendar query results */}
+        {voiceMode === 'calendar_query' && voiceState === 'done' && (
+          <View style={s.resultsBlock}>
+            <Text style={s.resultsLabel}>
+              {calendarEvents.length === 0
+                ? `NO MEETINGS · ${calendarQueryLabel.toUpperCase()}`
+                : `${calendarEvents.length} ${calendarEvents.length === 1 ? 'MEETING' : 'MEETINGS'} · ${calendarQueryLabel.toUpperCase()}`}
+            </Text>
+            {calendarEvents.length === 0 ? (
+              <View style={s.noEventsBlock}>
+                <Text style={s.noEventsEmoji}>📅</Text>
+                <Text style={s.noEventsText}>No meetings found for {calendarQueryLabel}</Text>
+              </View>
+            ) : (
+              calendarEvents.map(ev => <CalendarEventCard key={ev.id} event={ev} />)
+            )}
+            <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
+              <Text style={s.discardBtnText}>Ask another question</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -628,6 +762,10 @@ const s = StyleSheet.create({
   saveBtnText:  { color: C.bg, fontSize: 15, fontWeight: '700' },
   discardBtn:   { alignItems: 'center', paddingVertical: 10 },
   discardBtnText: { color: C.textTer, fontSize: 14 },
+
+  noEventsBlock: { backgroundColor: C.surface, borderRadius: 14, padding: 24, alignItems: 'center', borderWidth: 1, borderColor: C.border, marginBottom: 10, gap: 8 },
+  noEventsEmoji: { fontSize: 32 },
+  noEventsText:  { color: C.textSec, fontSize: 14, textAlign: 'center' },
 
   savedBlock: { alignItems: 'center', paddingVertical: 32, gap: 12 },
   savedIcon:  { fontSize: 40, color: C.verdigris },

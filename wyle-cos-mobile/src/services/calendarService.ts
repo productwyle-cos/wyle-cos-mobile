@@ -133,6 +133,69 @@ export function durationMins(start: Date, end: Date): number {
   return Math.round((end.getTime() - start.getTime()) / 60_000);
 }
 
+// ── Fetch events for a specific date range ────────────────────────────────────
+/**
+ * Fetches all Google Calendar events between startDate and endDate.
+ * Used for calendar query mode in Voice Brain Dump.
+ */
+export async function fetchEventsForDateRange(
+  startDate: Date,
+  endDate:   Date,
+): Promise<CalendarResult> {
+  try {
+    const token = await getAccessToken();
+    if (!token) {
+      return { events: [], conflicts: [], error: 'Not connected to Google Calendar.' };
+    }
+
+    const params = new URLSearchParams({
+      calendarId:   'primary',
+      timeMin:       startDate.toISOString(),
+      timeMax:       endDate.toISOString(),
+      singleEvents: 'true',
+      orderBy:      'startTime',
+      maxResults:   '50',
+    });
+
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { events: [], conflicts: [], error: err?.error?.message ?? `API error ${res.status}` };
+    }
+
+    const data  = await res.json();
+    const items: any[] = data.items ?? [];
+
+    const events: CalendarEvent[] = items.map(item => {
+      const isAllDay = !!item.start?.date && !item.start?.dateTime;
+      const startRaw = item.start?.dateTime ?? item.start?.date ?? startDate.toISOString();
+      const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? endDate.toISOString();
+      return {
+        id:          item.id ?? '',
+        title:       item.summary ?? '(No title)',
+        description: item.description ?? '',
+        location:    item.location ?? '',
+        startTime:   new Date(startRaw),
+        endTime:     new Date(endRaw),
+        isAllDay,
+        attendees:   (item.attendees ?? []).map((a: any) => a.displayName ?? a.email ?? '').filter(Boolean),
+        meetLink:
+          item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
+          ?? item.hangoutLink ?? '',
+        colorId: item.colorId ?? '',
+      };
+    });
+
+    return { events, conflicts: [] };
+  } catch (err: any) {
+    return { events: [], conflicts: [], error: err?.message ?? 'Unknown error' };
+  }
+}
+
 // ── Conflict check for a proposed time slot ───────────────────────────────────
 /**
  * Given a proposed start + end time, fetches Google Calendar events
