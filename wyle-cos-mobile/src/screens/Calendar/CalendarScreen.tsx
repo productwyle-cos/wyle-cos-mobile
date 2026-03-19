@@ -183,6 +183,34 @@ function EmptyState() {
   );
 }
 
+// ── Bottom Tab Bar ────────────────────────────────────────────────────────────
+function TabBar({ active, onTab }: { active: string; onTab: (s: any) => void }) {
+  const tabs = [
+    { screen: 'home',        emoji: '⌂',  label: 'Home'    },
+    { screen: 'obligations', emoji: '📋', label: 'Tasks'   },
+    { screen: 'buddy',       emoji: '◎',  label: 'Buddy'   },
+    { screen: 'insights',    emoji: '◈',  label: 'Insights'},
+  ];
+  return (
+    <View style={tab.bar}>
+      {tabs.map(t => (
+        <TouchableOpacity key={t.screen} style={tab.item} onPress={() => onTab(t.screen)}>
+          <Text style={[tab.emoji, active === t.screen && { opacity: 1 }]}>{t.emoji}</Text>
+          <Text style={[tab.label, active === t.screen && { color: C.verdigris }]}>{t.label}</Text>
+          {active === t.screen && <View style={tab.dot} />}
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+const tab = StyleSheet.create({
+  bar:   { flexDirection: 'row', backgroundColor: '#0A0A0A', borderTopWidth: 1, borderColor: C.border, paddingBottom: 20, paddingTop: 10 },
+  item:  { flex: 1, alignItems: 'center', gap: 3 },
+  emoji: { fontSize: 20, opacity: 0.5 },
+  label: { fontSize: 10, color: C.textTer, fontWeight: '500' },
+  dot:   { width: 4, height: 4, borderRadius: 2, backgroundColor: C.verdigris, marginTop: 2 },
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main screen
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,7 +324,7 @@ export default function CalendarScreen({ navigation }: { navigation: NavProp }) 
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 40 }}
+          contentContainerStyle={{ paddingBottom: 100 }}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -356,6 +384,9 @@ export default function CalendarScreen({ navigation }: { navigation: NavProp }) 
           </Animated.View>
         </ScrollView>
       )}
+
+      {/* ── Bottom Tab Bar ───────────────────────────────────────────────────── */}
+      <TabBar active="home" onTab={(s) => nav.navigate(s)} />
     </View>
   );
 }
