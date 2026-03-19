@@ -48,20 +48,46 @@ type ParsedObligation = {
 };
 
 // ── Claude prompt — extracts obligations from free speech ─────────────────────
-// Injected at call time so the date is always current
+// Injected at call time so the date is always current and unambiguous
 function buildBrainDumpSystem(): string {
-  const now = new Date();
-  const todayStr = now.toLocaleDateString('en-US', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-  });
-  const year = now.getFullYear();
+  const DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  const now   = new Date();
+  const yyyy  = now.getFullYear();
+  const mm    = String(now.getMonth() + 1).padStart(2, '0');
+  const dd    = String(now.getDate()).padStart(2, '0');
+  const todayISO    = `${yyyy}-${mm}-${dd}`;
+  const todayHuman  = `${DAYS[now.getDay()]}, ${MONTHS[now.getMonth()]} ${now.getDate()}, ${yyyy}`;
+
+  // Pre-compute next 14 days so Claude can resolve "Saturday", "next Monday" etc.
+  const upcomingDays = Array.from({ length: 14 }, (_, i) => {
+    const d    = new Date(now);
+    d.setDate(now.getDate() + i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const label = i === 0 ? 'TODAY' : i === 1 ? 'TOMORROW' : DAYS[d.getDay()];
+    return `  ${label} = ${y}-${m}-${day} (${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()})`;
+  }).join('\n');
+
+  // Last day of current month
+  const lastDay = new Date(yyyy, now.getMonth() + 1, 0).getDate();
+  const daysLeftInMonth = lastDay - now.getDate();
 
   return `You are Buddy, the AI chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
 
 The user has just done a voice brain dump — they spoke freely about everything on their mind that needs to be handled.
 
-TODAY'S DATE: ${todayStr}
-Use this date to calculate accurate daysUntil values. For example if today is March 19, 2026 and the user says "March 21st", daysUntil = 2.
+=== DATE CONTEXT (use ONLY these values — do not invent or guess) ===
+TODAY'S DATE: ${todayHuman}
+TODAY ISO:    ${todayISO}
+
+UPCOMING DATES (use these to resolve day names like "Saturday", "next Monday"):
+${upcomingDays}
+
+Days remaining in current month: ${daysLeftInMonth}
+=== END DATE CONTEXT ===
 
 Your job: Extract ALL obligations, tasks, payments, renewals, deadlines, or to-dos from what they said. Return them as a JSON array and NOTHING else — no explanation, no markdown, no preamble.
 
@@ -70,31 +96,25 @@ Each obligation must have:
 - emoji: relevant emoji for the type
 - title: short clear title (max 5 words)
 - type: one of: visa, emirates_id, car_registration, insurance, bill, school_fee, medical, appointment, payment, task, other
-- daysUntil: number of days from TODAY until due. Calculate precisely using today's date above. "next week" = 7, "end of month" = days remaining in month, "soon" = 14, "tomorrow" = 1, "today" = 0. For a specific date like "March 21st" calculate exactly.
-- risk: "high" if due < 7 days or urgent, "medium" if 7-30 days, "low" if > 30 days
+- daysUntil: EXACTLY how many days from TODAY (${todayISO}) until the due date. Use the UPCOMING DATES table above to resolve day names. "tomorrow" = 1, "today" = 0, "end of month" = ${daysLeftInMonth}, "next week" = 7, "soon" = 14. For a named day like "Saturday" look it up in the table above.
+- risk: "high" if daysUntil < 7 or urgent, "medium" if 7-30, "low" if > 30
 - amount: AED amount as number if mentioned, otherwise null
 - status: always "active"
 - executionPath: brief instruction on how to handle (1 short sentence)
 - notes: any extra detail mentioned, or null
-- scheduledTime: if the user mentions a SPECIFIC TIME for this task (e.g. "9:30 AM", "2 PM", "at noon"), return the full ISO 8601 datetime string combining the date and time (e.g. "${year}-03-21T09:30:00"). Use the year ${year}. If no specific time is mentioned, return null.
+- scheduledTime: if the user mentions a SPECIFIC TIME (e.g. "9:30 AM", "2 PM", "at noon"), combine the resolved date + time into a full ISO 8601 string (e.g. "2026-03-21T09:30:00"). If no specific time is mentioned, return null.
 
-Example output for "I need to pay my DEWA bill, it's about 500 dirhams, and also my hospital appointment is on March 21st at 9:30 AM":
+CRITICAL RULES:
+1. daysUntil must be calculated from ${todayISO}. Do NOT use any other reference date.
+2. "coming Saturday" or "this Saturday" = look up Saturday in the UPCOMING DATES table above.
+3. Always include scheduledTime when a time of day is mentioned (even with relative dates like "Saturday at 9:30 AM").
+
+Example — if today is 2026-03-19 (Thursday) and user says "hospital appointment coming Saturday at 9:30 AM":
+Saturday = 2026-03-21, daysUntil = 2, scheduledTime = "2026-03-21T09:30:00"
+
 [
   {
     "_id": "dump_1_1234567890",
-    "emoji": "💡",
-    "title": "DEWA Bill Payment",
-    "type": "bill",
-    "daysUntil": 7,
-    "risk": "medium",
-    "amount": 500,
-    "status": "active",
-    "executionPath": "Pay via DEWA app or website",
-    "notes": null,
-    "scheduledTime": null
-  },
-  {
-    "_id": "dump_2_1234567890",
     "emoji": "🏥",
     "title": "Hospital Appointment",
     "type": "appointment",
@@ -103,8 +123,8 @@ Example output for "I need to pay my DEWA bill, it's about 500 dirhams, and also
     "amount": null,
     "status": "active",
     "executionPath": "Attend hospital appointment on time",
-    "notes": "March 21st at 9:30 AM",
-    "scheduledTime": "${year}-03-21T09:30:00"
+    "notes": "Saturday March 21st at 9:30 AM",
+    "scheduledTime": "2026-03-21T09:30:00"
   }
 ]
 
