@@ -15,7 +15,7 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { VoiceService } from '../../services/voiceService';
 import { UIObligation } from '../../types';
-import { checkTimeConflicts, CalendarEvent, fmtTime, fmtDate } from '../../services/calendarService';
+import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate } from '../../services/calendarService';
 
 const { width } = Dimensions.get('window');
 
@@ -54,27 +54,54 @@ const TYPE_OPTIONS = [
 
 const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 
-const BRAIN_DUMP_SYSTEM = `You are Buddy inside Wyle — a life management app for busy professionals in Dubai, UAE.
-The user has done a voice brain dump. Extract ALL obligations, tasks, payments, renewals, deadlines from what they said.
-The user message starts with [Today is YYYY-MM-DD] — use this to resolve relative dates like "tomorrow", "Saturday", "next week".
-Return ONLY a JSON array, no explanation, no markdown, no preamble.
+function buildBrainDumpSystem(): string {
+  const DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const now    = new Date();
+  const yyyy   = now.getFullYear();
+  const mm     = String(now.getMonth() + 1).padStart(2, '0');
+  const dd     = String(now.getDate()).padStart(2, '0');
+  const todayISO   = `${yyyy}-${mm}-${dd}`;
+  const todayHuman = `${DAYS[now.getDay()]}, ${MONTHS[now.getMonth()]} ${now.getDate()}, ${yyyy}`;
+  const lastDay    = new Date(yyyy, now.getMonth() + 1, 0).getDate();
+  const daysLeft   = lastDay - now.getDate();
 
-Each item must have:
-- _id: unique string like "dump_0_1234567890"
-- emoji: relevant emoji
-- title: short title (max 5 words)
-- type: one of: visa, emirates_id, car_registration, insurance, bill, school_fee, medical, appointment, payment, task, other
-- daysUntil: number ("next week"=7, "end of month"=estimate, "tomorrow"=1, "today"=0, "soon"=14)
-- risk: "high" if <7 days, "medium" if 7-30 days, "low" if >30 days
-- amount: AED number if mentioned, else null
-- status: "active"
-- executionPath: one short sentence on how to handle it
-- notes: extra detail mentioned, or null
-- scheduledDateTime: ISO 8601 string (e.g. "2026-03-21T09:30:00") ONLY if the user mentions a SPECIFIC date AND time for an appointment or event. Use the [Today is ...] date to resolve relative dates. Set to null if no specific time is mentioned.
-- scheduledDuration: estimated duration in minutes (default 60) for timed appointments. null if scheduledDateTime is null.
+  const upcoming = Array.from({ length: 14 }, (_, i) => {
+    const d   = new Date(now); d.setDate(now.getDate() + i);
+    const y   = d.getFullYear();
+    const m   = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const lbl = i === 0 ? 'TODAY' : i === 1 ? 'TOMORROW' : DAYS[d.getDay()];
+    return `  ${lbl} = ${y}-${m}-${day} (${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()})`;
+  }).join('\n');
 
-Return ONLY the JSON array. Example: [{"_id":"dump_0_123","emoji":"💡","title":"DEWA Bill","type":"bill","daysUntil":7,"risk":"medium","amount":500,"status":"active","executionPath":"Pay via DEWA app","notes":null,"scheduledDateTime":null,"scheduledDuration":null}]
-If nothing actionable, return: []`;
+  return `You are Buddy inside Wyle — a life management app for busy professionals in Dubai, UAE.
+
+=== DATE CONTEXT ===
+TODAY: ${todayHuman}
+TODAY ISO: ${todayISO}
+UPCOMING DATES (use to resolve "Saturday", "next Monday", etc.):
+${upcoming}
+Days left in month: ${daysLeft}
+=== END DATE CONTEXT ===
+
+=== DUAL INTENT DETECTION ===
+Detect whether the user is CREATING tasks OR QUERYING their calendar.
+
+INTENT "tasks" — user is adding obligations/tasks/reminders:
+Return: {"intent":"tasks","items":[...]}
+Each item: _id, emoji, title, type (visa/emirates_id/car_registration/insurance/bill/school_fee/medical/appointment/payment/task/other), daysUntil (from ${todayISO}), risk (high<7d/medium7-30d/low>30d), amount (AED or null), status:"active", executionPath, notes, scheduledDateTime (ISO if specific time mentioned, else null), scheduledDuration (mins, default 60, null if no time)
+If nothing actionable: {"intent":"tasks","items":[]}
+
+INTENT "calendar_query" — user is ASKING about their schedule:
+Triggered by: "what meetings", "my schedule", "do I have anything on", "list my meetings", "show me meetings", "tell me my meetings"
+Return: {"intent":"calendar_query","start":"<ISO datetime>","end":"<ISO datetime>","label":"<human period>"}
+- start = beginning of queried day/period (T00:00:00)
+- end   = end of queried period (T23:59:59)
+- label = e.g. "Saturday, Mar 21", "next week", "tomorrow"
+
+Return ONLY valid JSON. No markdown, no explanation.`;
+}
 
 function getDaysLabel(days: number): string {
   if (days < 0) return `Overdue ${Math.abs(days)}d`;
@@ -474,6 +501,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
   onResolve: (id: string) => void;
 }) {
   const [voiceState, setVoiceState]         = useState<VoiceState>('idle');
+  const [voiceMode, setVoiceMode]           = useState<'task_creation' | 'calendar_query'>('task_creation');
   const [transcript, setTranscript]         = useState('');
   const [parsed, setParsed]                 = useState<UIObligation[]>([]);
   const [showReview, setShowReview]         = useState(false);
@@ -481,13 +509,16 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
   const [dupeItems, setDupeItems]           = useState<{ incoming: UIObligation; existing: UIObligation }[]>([]);
   const [completionTarget, setCompletionTarget] = useState<UIObligation | null>(null);
   const [conflictWarnings, setConflictWarnings] = useState<Map<string, CalendarEvent[]>>(new Map());
+  const [calendarEvents, setCalendarEvents]     = useState<CalendarEvent[]>([]);
+  const [calendarQueryLabel, setCalendarQueryLabel] = useState('');
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (visible) {
       setVoiceState('idle'); setTranscript(''); setParsed([]);
       setShowReview(false); setFreshItems([]); setDupeItems([]); setCompletionTarget(null);
-      setConflictWarnings(new Map());
+      setConflictWarnings(new Map()); setCalendarEvents([]); setCalendarQueryLabel('');
+      setVoiceMode('task_creation');
     }
   }, [visible]);
 
@@ -529,10 +560,6 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
     setVoiceState('parsing');
     setConflictWarnings(new Map());
     try {
-      // Inject today's date so Claude can resolve relative dates
-      const today = new Date().toISOString().split('T')[0];
-      const textWithDate = `[Today is ${today}]\n${text}`;
-
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -544,21 +571,48 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
           max_tokens: 1500,
-          system: BRAIN_DUMP_SYSTEM,
-          messages: [{ role: 'user', content: textWithDate }],
+          system: buildBrainDumpSystem(),
+          messages: [{ role: 'user', content: text }],
         }),
       });
-      const data = await res.json();
-      const raw   = data.content?.[0]?.text ?? '[]';
+      const data  = await res.json();
+      const raw   = data.content?.[0]?.text ?? '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
-      const items: UIObligation[] = JSON.parse(clean);
-      const stamped = items.map((item, i) => ({ ...item, _id: `dump_${i}_${Date.now()}` }));
+      const parsed_json = JSON.parse(clean);
+
+      // Support legacy plain array + new {intent} format
+      const response = Array.isArray(parsed_json)
+        ? { intent: 'tasks', items: parsed_json }
+        : parsed_json;
+
+      // ── Calendar query mode ───────────────────────────────────────────────
+      if (response.intent === 'calendar_query') {
+        setVoiceMode('calendar_query');
+        setCalendarQueryLabel(response.label ?? '');
+        const start  = new Date(response.start);
+        const end    = new Date(response.end);
+        const result = await fetchEventsForDateRange(start, end);
+        setCalendarEvents(result.events);
+        setVoiceState('done');
+        const n = result.events.length;
+        Speech.speak(
+          n > 0
+            ? `You have ${n} ${n === 1 ? 'meeting' : 'meetings'} for ${response.label}.`
+            : `No meetings found for ${response.label}.`,
+          { language: 'en-US', rate: 0.95 },
+        );
+        return;
+      }
+
+      // ── Task creation mode ────────────────────────────────────────────────
+      setVoiceMode('task_creation');
+      const items: UIObligation[] = response.items ?? [];
+      const stamped = items.map((item: UIObligation, i: number) => ({ ...item, _id: `dump_${i}_${Date.now()}` }));
       setParsed(stamped);
       setVoiceState('done');
       if (stamped.length > 0) {
         Speech.speak(`Found ${stamped.length} ${stamped.length === 1 ? 'task' : 'tasks'}.`, { language: 'en-US', rate: 0.95 });
       }
-      // Check for calendar conflicts (non-blocking)
       checkCalendarConflicts(stamped);
     } catch {
       setVoiceState('error');
@@ -731,7 +785,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
              voiceState === 'recording'    ? '🔴 Listening... tap to stop' :
              voiceState === 'transcribing' ? '⏳ Processing voice...' :
              voiceState === 'parsing'      ? '🤖 Buddy is structuring tasks...' :
-             voiceState === 'done'         ? (completionTarget ? '✓ Found matching task — confirm below' : `✓ ${parsed.length} tasks found — save them below`) :
+             voiceState === 'done'         ? (completionTarget ? '✓ Found matching task — confirm below' : voiceMode === 'calendar_query' ? `📅 ${calendarEvents.length} ${calendarEvents.length === 1 ? 'meeting' : 'meetings'} · ${calendarQueryLabel}` : `✓ ${parsed.length} tasks found — save them below`) :
              voiceState === 'error'        ? 'Could not process. Try again.' : ''}
           </Text>
 
@@ -811,7 +865,53 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
             </View>
           )}
 
-          {!showReview && voiceState === 'done' && parsed.length === 0 && (
+          {/* Calendar query results */}
+          {voiceMode === 'calendar_query' && voiceState === 'done' && (
+            <View>
+              <Text style={bd.resultsLabel}>
+                {calendarEvents.length === 0
+                  ? `NO MEETINGS · ${calendarQueryLabel.toUpperCase()}`
+                  : `${calendarEvents.length} ${calendarEvents.length === 1 ? 'MEETING' : 'MEETINGS'} · ${calendarQueryLabel.toUpperCase()}`}
+              </Text>
+              <ScrollView style={{ maxHeight: 220 }} showsVerticalScrollIndicator={false}>
+                {calendarEvents.length === 0 ? (
+                  <View style={bd.noEventsBox}>
+                    <Text style={bd.noEventsText}>📅 No meetings found for {calendarQueryLabel}</Text>
+                  </View>
+                ) : (
+                  calendarEvents.map(ev => (
+                    <View key={ev.id} style={bd.eventCard}>
+                      <View style={bd.eventTimeCol}>
+                        {ev.isAllDay ? (
+                          <Text style={bd.eventAllDay}>ALL DAY</Text>
+                        ) : (
+                          <>
+                            <Text style={bd.eventTime}>{fmtTime(ev.startTime)}</Text>
+                            <Text style={bd.eventTimeSep}>–</Text>
+                            <Text style={bd.eventTime}>{fmtTime(ev.endTime)}</Text>
+                          </>
+                        )}
+                      </View>
+                      <View style={bd.eventDivider} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={bd.eventTitle}>{ev.title}</Text>
+                        {!!ev.location  && <Text style={bd.eventSub}>📍 {ev.location}</Text>}
+                        {!!ev.meetLink  && <Text style={bd.eventSub}>📹 Google Meet</Text>}
+                      </View>
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+              <TouchableOpacity style={bd.retryBtn} onPress={() => {
+                setVoiceState('idle'); setVoiceMode('task_creation');
+                setCalendarEvents([]); setCalendarQueryLabel(''); setTranscript('');
+              }}>
+                <Text style={bd.retryBtnText}>Ask another question</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {!showReview && voiceMode === 'task_creation' && voiceState === 'done' && parsed.length === 0 && (
             <TouchableOpacity style={bd.retryBtn} onPress={() => setVoiceState('idle')}>
               <Text style={bd.retryBtnText}>Nothing found — try again</Text>
             </TouchableOpacity>
@@ -1212,6 +1312,16 @@ const bd = StyleSheet.create({
   saveBtnText:    { color: C.bg, fontSize: 15, fontWeight: '700' },
   retryBtn:       { alignItems: 'center', paddingVertical: 10 },
   retryBtnText:   { color: C.textTer, fontSize: 13 },
+  noEventsBox:    { backgroundColor: C.surfaceEl, borderRadius: 12, padding: 20, alignItems: 'center', marginBottom: 8 },
+  noEventsText:   { color: C.textSec, fontSize: 13, textAlign: 'center' },
+  eventCard:      { flexDirection: 'row', backgroundColor: C.surfaceEl, borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: C.border, borderLeftWidth: 3, borderLeftColor: C.verdigris, gap: 10, alignItems: 'flex-start' },
+  eventTimeCol:   { alignItems: 'center', minWidth: 60 },
+  eventTime:      { color: C.textSec, fontSize: 10, fontWeight: '600' },
+  eventTimeSep:   { color: C.textTer, fontSize: 9 },
+  eventAllDay:    { color: C.verdigris, fontSize: 9, fontWeight: '700', letterSpacing: 0.5 },
+  eventDivider:   { width: 1, alignSelf: 'stretch', backgroundColor: C.border },
+  eventTitle:     { color: C.white, fontSize: 13, fontWeight: '600', marginBottom: 2 },
+  eventSub:       { color: C.textTer, fontSize: 11, marginTop: 1 },
   dupeCard:       { backgroundColor: C.surfaceEl, borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: C.border, gap: 6 },
   dupeRow:        { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dupeLabelPill:  { backgroundColor: `${C.verdigris}18`, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
