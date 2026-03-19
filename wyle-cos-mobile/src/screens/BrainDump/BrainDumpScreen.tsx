@@ -11,6 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Speech from 'expo-speech';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
+import { checkTimeConflicts, CalendarEvent, fmtTime, fmtDate } from '../../services/calendarService';
 import type { NavProp } from '../../../app/index';
 
 const C = {
@@ -43,12 +44,24 @@ type ParsedObligation = {
   status: 'active';
   executionPath: string;
   notes: string | null;
+  scheduledTime: string | null; // ISO datetime if user mentioned a specific time
 };
 
 // ── Claude prompt — extracts obligations from free speech ─────────────────────
-const BRAIN_DUMP_SYSTEM = `You are Buddy, the AI chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
+// Injected at call time so the date is always current
+function buildBrainDumpSystem(): string {
+  const now = new Date();
+  const todayStr = now.toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+  const year = now.getFullYear();
+
+  return `You are Buddy, the AI chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
 
 The user has just done a voice brain dump — they spoke freely about everything on their mind that needs to be handled.
+
+TODAY'S DATE: ${todayStr}
+Use this date to calculate accurate daysUntil values. For example if today is March 19, 2026 and the user says "March 21st", daysUntil = 2.
 
 Your job: Extract ALL obligations, tasks, payments, renewals, deadlines, or to-dos from what they said. Return them as a JSON array and NOTHING else — no explanation, no markdown, no preamble.
 
@@ -57,14 +70,15 @@ Each obligation must have:
 - emoji: relevant emoji for the type
 - title: short clear title (max 5 words)
 - type: one of: visa, emirates_id, car_registration, insurance, bill, school_fee, medical, appointment, payment, task, other
-- daysUntil: number of days until due (estimate if vague — "next week" = 7, "end of month" = estimate remaining days, "soon" = 14, "tomorrow" = 1, "today" = 0)
+- daysUntil: number of days from TODAY until due. Calculate precisely using today's date above. "next week" = 7, "end of month" = days remaining in month, "soon" = 14, "tomorrow" = 1, "today" = 0. For a specific date like "March 21st" calculate exactly.
 - risk: "high" if due < 7 days or urgent, "medium" if 7-30 days, "low" if > 30 days
 - amount: AED amount as number if mentioned, otherwise null
 - status: always "active"
 - executionPath: brief instruction on how to handle (1 short sentence)
 - notes: any extra detail mentioned, or null
+- scheduledTime: if the user mentions a SPECIFIC TIME for this task (e.g. "9:30 AM", "2 PM", "at noon"), return the full ISO 8601 datetime string combining the date and time (e.g. "${year}-03-21T09:30:00"). Use the year ${year}. If no specific time is mentioned, return null.
 
-Example output for "I need to pay my DEWA bill, it's about 500 dirhams, and also my car service is due next month":
+Example output for "I need to pay my DEWA bill, it's about 500 dirhams, and also my hospital appointment is on March 21st at 9:30 AM":
 [
   {
     "_id": "dump_1_1234567890",
@@ -76,24 +90,27 @@ Example output for "I need to pay my DEWA bill, it's about 500 dirhams, and also
     "amount": 500,
     "status": "active",
     "executionPath": "Pay via DEWA app or website",
-    "notes": null
+    "notes": null,
+    "scheduledTime": null
   },
   {
     "_id": "dump_2_1234567890",
-    "emoji": "🔧",
-    "title": "Car Service",
-    "type": "task",
-    "daysUntil": 30,
-    "risk": "low",
+    "emoji": "🏥",
+    "title": "Hospital Appointment",
+    "type": "appointment",
+    "daysUntil": 2,
+    "risk": "high",
     "amount": null,
     "status": "active",
-    "executionPath": "Book service appointment at dealership",
-    "notes": "Due next month"
+    "executionPath": "Attend hospital appointment on time",
+    "notes": "March 21st at 9:30 AM",
+    "scheduledTime": "${year}-03-21T09:30:00"
   }
 ]
 
 If nothing actionable is mentioned, return an empty array: []
 Return ONLY the JSON array. No other text.`;
+}
 
 // ── Waveform animation ────────────────────────────────────────────────────────
 function Waveform({ active }: { active: boolean }) {
@@ -140,7 +157,7 @@ const wv = StyleSheet.create({
 });
 
 // ── Parsed obligation preview card ────────────────────────────────────────────
-function ObligationPreview({ item }: { item: ParsedObligation }) {
+function ObligationPreview({ item, conflictEvents = [] }: { item: ParsedObligation; conflictEvents?: CalendarEvent[] }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
 
@@ -151,43 +168,67 @@ function ObligationPreview({ item }: { item: ParsedObligation }) {
     ]).start();
   }, []);
 
-  const riskColor = item.risk === 'high' ? C.crimson : item.risk === 'medium' ? C.chartreuse : C.verdigris;
+  const hasConflict = conflictEvents.length > 0;
+  const riskColor   = hasConflict ? C.crimson : item.risk === 'high' ? C.crimson : item.risk === 'medium' ? C.chartreuse : C.verdigris;
 
   return (
-    <Animated.View style={[op.card, { opacity: fadeAnim, transform: [{ translateY: slideAnim }], borderLeftColor: riskColor }]}>
-      <Text style={op.emoji}>{item.emoji}</Text>
-      <View style={{ flex: 1 }}>
-        <Text style={op.title}>{item.title}</Text>
-        <View style={op.meta}>
-          <View style={[op.riskPill, { backgroundColor: `${riskColor}20` }]}>
-            <Text style={[op.riskText, { color: riskColor }]}>{item.risk.toUpperCase()}</Text>
+    <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }], marginBottom: 10 }}>
+      {/* Main card */}
+      <View style={[op.card, { borderLeftColor: riskColor, marginBottom: hasConflict ? 0 : 0 }]}>
+        <Text style={op.emoji}>{item.emoji}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={op.title}>{item.title}</Text>
+          <View style={op.meta}>
+            <View style={[op.riskPill, { backgroundColor: `${riskColor}20` }]}>
+              <Text style={[op.riskText, { color: riskColor }]}>{item.risk.toUpperCase()}</Text>
+            </View>
+            <Text style={op.days}>
+              {item.daysUntil === 0 ? 'Due today' : item.daysUntil === 1 ? 'Tomorrow' : `${item.daysUntil} days`}
+            </Text>
+            {item.amount && <Text style={op.amount}>AED {item.amount.toLocaleString()}</Text>}
           </View>
-          <Text style={op.days}>
-            {item.daysUntil === 0 ? 'Due today' : item.daysUntil === 1 ? 'Tomorrow' : `${item.daysUntil} days`}
-          </Text>
-          {item.amount && <Text style={op.amount}>AED {item.amount.toLocaleString()}</Text>}
+          {item.notes && <Text style={op.notes}>{item.notes}</Text>}
         </View>
-        {item.notes && <Text style={op.notes}>{item.notes}</Text>}
+        <View style={op.newBadge}>
+          <Text style={op.newText}>NEW</Text>
+        </View>
       </View>
-      <View style={op.newBadge}>
-        <Text style={op.newText}>NEW</Text>
-      </View>
+
+      {/* ⚠️ Conflict warning banner */}
+      {hasConflict && (
+        <View style={op.conflictBanner}>
+          <Text style={op.conflictIcon}>⚠️</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={op.conflictTitle}>Calendar Conflict Detected</Text>
+            {conflictEvents.map(ev => (
+              <Text key={ev.id} style={op.conflictDetail}>
+                "{ev.title}" is already scheduled at {fmtTime(ev.startTime)}–{fmtTime(ev.endTime)} on {fmtDate(ev.startTime)}
+              </Text>
+            ))}
+          </View>
+        </View>
+      )}
     </Animated.View>
   );
 }
 
 const op = StyleSheet.create({
-  card:     { backgroundColor: C.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10, borderWidth: 1, borderColor: C.border, borderLeftWidth: 4 },
-  emoji:    { fontSize: 24, width: 32, textAlign: 'center' },
-  title:    { color: C.white, fontSize: 14, fontWeight: '600', marginBottom: 4 },
-  meta:     { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  riskPill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 999 },
-  riskText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
-  days:     { color: C.textSec, fontSize: 12, fontWeight: '600' },
-  amount:   { color: C.textSec, fontSize: 12 },
-  notes:    { color: C.textTer, fontSize: 11, marginTop: 3 },
-  newBadge: { backgroundColor: `${C.chartreuse}20`, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: `${C.chartreuse}40` },
-  newText:  { color: C.chartreuse, fontSize: 9, fontWeight: '800' },
+  card:           { backgroundColor: C.surface, borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: C.border, borderLeftWidth: 4 },
+  emoji:          { fontSize: 24, width: 32, textAlign: 'center' },
+  title:          { color: C.white, fontSize: 14, fontWeight: '600', marginBottom: 4 },
+  meta:           { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  riskPill:       { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 999 },
+  riskText:       { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
+  days:           { color: C.textSec, fontSize: 12, fontWeight: '600' },
+  amount:         { color: C.textSec, fontSize: 12 },
+  notes:          { color: C.textTer, fontSize: 11, marginTop: 3 },
+  newBadge:       { backgroundColor: `${C.chartreuse}20`, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: `${C.chartreuse}40` },
+  newText:        { color: C.chartreuse, fontSize: 9, fontWeight: '800' },
+  // Conflict banner — attached below the card
+  conflictBanner: { backgroundColor: `${C.crimson}18`, borderWidth: 1, borderTopWidth: 0, borderColor: C.crimson, borderBottomLeftRadius: 12, borderBottomRightRadius: 12, padding: 10, flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  conflictIcon:   { fontSize: 14, marginTop: 1 },
+  conflictTitle:  { color: C.crimson, fontSize: 11, fontWeight: '700', marginBottom: 3 },
+  conflictDetail: { color: `${C.crimson}CC`, fontSize: 11, lineHeight: 16 },
 });
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
@@ -198,6 +239,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
   const [voiceState, setVoiceState]     = useState<VoiceState>('idle');
   const [transcript, setTranscript]     = useState('');
   const [parsed, setParsed]             = useState<ParsedObligation[]>([]);
+  const [conflicts, setConflicts]       = useState<Record<string, CalendarEvent[]>>({});
   const [savedCount, setSavedCount]     = useState(0);
   const [tipIndex, setTipIndex]         = useState(0);
 
@@ -282,7 +324,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
           max_tokens: 1500,
-          system: BRAIN_DUMP_SYSTEM,
+          system: buildBrainDumpSystem(), // uses today's date
           messages: [{ role: 'user', content: text }],
         }),
       });
@@ -302,19 +344,37 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
         _id: `dump_${i}_${Date.now()}`,
       }));
 
+      // ── Conflict check: for items with a specific scheduledTime ─────────────
+      const conflictsMap: Record<string, CalendarEvent[]> = {};
+      await Promise.all(
+        stamped.map(async (item) => {
+          if (!item.scheduledTime) return;
+          try {
+            const start = new Date(item.scheduledTime);
+            // Default slot = 1 hour; skip if invalid date
+            if (isNaN(start.getTime())) return;
+            const end = new Date(start.getTime() + 60 * 60 * 1000);
+            const clashing = await checkTimeConflicts(start, end);
+            if (clashing.length > 0) conflictsMap[item._id] = clashing;
+          } catch { /* silently skip if calendar not connected */ }
+        })
+      );
+      setConflicts(conflictsMap);
+
       setParsed(stamped);
       setVoiceState('done');
 
-      // Announce result
+      // Announce result (mention conflicts if any)
+      const conflictCount = Object.keys(conflictsMap).length;
       if (stamped.length > 0) {
-        Speech.speak(`Got it. I found ${stamped.length} ${stamped.length === 1 ? 'item' : 'items'} to add.`, {
-          language: 'en-US', rate: 0.95,
-        });
+        const msg = conflictCount > 0
+          ? `Got it. I found ${stamped.length} ${stamped.length === 1 ? 'item' : 'items'}. Warning — ${conflictCount} ${conflictCount === 1 ? 'has a' : 'have'} calendar conflict.`
+          : `Got it. I found ${stamped.length} ${stamped.length === 1 ? 'item' : 'items'} to add.`;
+        Speech.speak(msg, { language: 'en-US', rate: 0.95 });
       }
 
     } catch (err) {
       console.error('Brain dump parse error:', err);
-      // Fallback — still show something
       setVoiceState('error');
     }
   };
@@ -335,6 +395,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
 
   const handleDiscard = () => {
     setParsed([]);
+    setConflicts({});
     setTranscript('');
     setVoiceState('idle');
     setSavedCount(0);
@@ -422,12 +483,25 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
               BUDDY FOUND {parsed.length} {parsed.length === 1 ? 'TASK' : 'TASKS'}
             </Text>
             {parsed.map(item => (
-              <ObligationPreview key={item._id} item={item} />
+              <ObligationPreview
+                key={item._id}
+                item={item}
+                conflictEvents={conflicts[item._id] ?? []}
+              />
             ))}
+
+            {/* Conflict summary banner */}
+            {Object.keys(conflicts).length > 0 && (
+              <View style={s.conflictSummary}>
+                <Text style={s.conflictSummaryText}>
+                  ⚠️ {Object.keys(conflicts).length} {Object.keys(conflicts).length === 1 ? 'task has' : 'tasks have'} a calendar conflict — review before saving
+                </Text>
+              </View>
+            )}
 
             {/* Save / Discard actions */}
             <TouchableOpacity style={s.saveBtn} onPress={handleSaveAll}>
-              <Text style={s.saveBtnText}>Add all {parsed.length} to Obligations</Text>
+              <Text style={s.saveBtnText}>Add {parsed.length} {parsed.length === 1 ? 'task' : 'tasks'} to Automations</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
               <Text style={s.discardBtnText}>Discard & try again</Text>
@@ -528,6 +602,8 @@ const s = StyleSheet.create({
   resultsLabel: { color: C.textTer, fontSize: 9, fontWeight: '800', letterSpacing: 2, marginBottom: 12 },
   resultsBlock: { marginBottom: 16 },
 
+  conflictSummary:     { backgroundColor: `${C.crimson}18`, borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: `${C.crimson}50` },
+  conflictSummaryText: { color: C.crimson, fontSize: 12, fontWeight: '600', textAlign: 'center', lineHeight: 18 },
   saveBtn:      { backgroundColor: C.chartreuse, borderRadius: 999, paddingVertical: 15, alignItems: 'center', marginTop: 4, marginBottom: 10 },
   saveBtnText:  { color: C.bg, fontSize: 15, fontWeight: '700' },
   discardBtn:   { alignItems: 'center', paddingVertical: 10 },
