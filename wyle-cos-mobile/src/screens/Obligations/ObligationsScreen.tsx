@@ -15,7 +15,7 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { VoiceService } from '../../services/voiceService';
 import { UIObligation } from '../../types';
-import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate } from '../../services/calendarService';
+import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate, detectDayOverload, OVERLOAD_THRESHOLD } from '../../services/calendarService';
 
 const { width } = Dimensions.get('window');
 
@@ -491,6 +491,16 @@ const cw = StyleSheet.create({
   detail: { color: C.textSec, fontSize: 11, lineHeight: 16 },
 });
 
+// ── Overload Warning Card styles ──────────────────────────────────────────────
+const ow = StyleSheet.create({
+  card:   { flexDirection: 'row', gap: 10, backgroundColor: 'rgba(255,59,48,0.10)', borderRadius: 10, padding: 10, marginTop: 4, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,59,48,0.30)' },
+  icon:   { fontSize: 16, marginTop: 1 },
+  title:  { color: C.crimson, fontSize: 12, fontWeight: '700', marginBottom: 3 },
+  detail: { color: C.textSec, fontSize: 11, lineHeight: 16 },
+  banner: { flexDirection: 'row', gap: 10, backgroundColor: 'rgba(255,59,48,0.10)', borderRadius: 10, padding: 12, marginTop: 8, marginBottom: 4, borderWidth: 1, borderColor: 'rgba(255,59,48,0.30)' },
+  bannerText: { color: C.crimson, fontSize: 12, fontWeight: '700', flex: 1 },
+});
+
 // Brain Dump Modal (all logic unchanged, dark theme applied)
 // ─────────────────────────────────────────────────────────────────────────────
 function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResolve }: {
@@ -509,6 +519,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
   const [dupeItems, setDupeItems]           = useState<{ incoming: UIObligation; existing: UIObligation }[]>([]);
   const [completionTarget, setCompletionTarget] = useState<UIObligation | null>(null);
   const [conflictWarnings, setConflictWarnings] = useState<Map<string, CalendarEvent[]>>(new Map());
+  const [overloadWarnings, setOverloadWarnings] = useState<Record<string, { count: number; events: CalendarEvent[] }>>({});
   const [calendarEvents, setCalendarEvents]     = useState<CalendarEvent[]>([]);
   const [calendarQueryLabel, setCalendarQueryLabel] = useState('');
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -517,7 +528,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
     if (visible) {
       setVoiceState('idle'); setTranscript(''); setParsed([]);
       setShowReview(false); setFreshItems([]); setDupeItems([]); setCompletionTarget(null);
-      setConflictWarnings(new Map()); setCalendarEvents([]); setCalendarQueryLabel('');
+      setConflictWarnings(new Map()); setOverloadWarnings({}); setCalendarEvents([]); setCalendarQueryLabel('');
       setVoiceMode('task_creation');
     }
   }, [visible]);
@@ -559,6 +570,7 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
   const parseWithClaude = async (text: string) => {
     setVoiceState('parsing');
     setConflictWarnings(new Map());
+    setOverloadWarnings({});
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -610,10 +622,33 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
       const stamped = items.map((item: UIObligation, i: number) => ({ ...item, _id: `dump_${i}_${Date.now()}` }));
       setParsed(stamped);
       setVoiceState('done');
+
+      // ── Run conflict + overload checks in parallel ──────────────────────────
+      const [, overloadMap] = await Promise.all([
+        checkCalendarConflicts(stamped),
+        (async () => {
+          const map: Record<string, { count: number; events: CalendarEvent[] }> = {};
+          await Promise.all(
+            stamped.map(async (item: UIObligation) => {
+              const dt = (item as any).scheduledDateTime;
+              if (!dt) return;
+              const date = new Date(dt);
+              if (isNaN(date.getTime())) return;
+              const result = await detectDayOverload(date);
+              if (result.isOverloaded) map[item._id] = { count: result.count, events: result.events };
+            })
+          );
+          return map;
+        })(),
+      ]);
+      setOverloadWarnings(overloadMap);
+
+      const overloadCount = Object.keys(overloadMap).length;
       if (stamped.length > 0) {
-        Speech.speak(`Found ${stamped.length} ${stamped.length === 1 ? 'task' : 'tasks'}.`, { language: 'en-US', rate: 0.95 });
+        const parts: string[] = [`Found ${stamped.length} ${stamped.length === 1 ? 'task' : 'tasks'}.`];
+        if (overloadCount > 0) parts.push(`Warning — ${overloadCount} ${overloadCount === 1 ? 'task is' : 'tasks are'} scheduled on overloaded days with ${OVERLOAD_THRESHOLD} or more existing meetings.`);
+        Speech.speak(parts.join(' '), { language: 'en-US', rate: 0.95 });
       }
-      checkCalendarConflicts(stamped);
     } catch {
       setVoiceState('error');
     }
@@ -743,13 +778,16 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
               <Text style={bd.resultsLabel}>
                 BUDDY FOUND {parsed.length} {parsed.length === 1 ? 'TASK' : 'TASKS'}
                 {conflictWarnings.size > 0 ? `  ·  ⚠️ ${conflictWarnings.size} CONFLICT${conflictWarnings.size > 1 ? 'S' : ''}` : ''}
+                {Object.keys(overloadWarnings).length > 0 ? `  ·  🔴 OVERLOAD` : ''}
               </Text>
               {parsed.map(item => {
                 const rc = RISK_COLORS[item.risk as Risk];
                 const conflicts = conflictWarnings.get(item._id);
+                const overload  = overloadWarnings[item._id];
+                const leftColor = conflicts ? C.orange : overload ? C.crimson : rc;
                 return (
                   <View key={item._id}>
-                    <View style={[bd.parsedCard, { borderLeftColor: conflicts ? C.orange : rc }]}>
+                    <View style={[bd.parsedCard, { borderLeftColor: leftColor }]}>
                       <Text style={bd.parsedEmoji}>{item.emoji}</Text>
                       <View style={{ flex: 1 }}>
                         <Text style={bd.parsedTitle}>{item.title}</Text>
@@ -762,6 +800,15 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
                       <View style={bd.newBadge}><Text style={bd.newText}>NEW</Text></View>
                     </View>
                     {conflicts && <ConflictWarningCard events={conflicts} />}
+                    {overload && (
+                      <View style={ow.card}>
+                        <Text style={ow.icon}>🔴</Text>
+                        <View style={{ flex: 1 }}>
+                          <Text style={ow.title}>Day overload — {overload.count} meetings already</Text>
+                          <Text style={ow.detail}>This day has {overload.count} existing meetings (threshold: {OVERLOAD_THRESHOLD}). Consider rescheduling.</Text>
+                        </View>
+                      </View>
+                    )}
                   </View>
                 );
               })}
@@ -848,6 +895,17 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
                   <Text style={bd.retryBtnText}>Back</Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          )}
+
+          {!showReview && voiceState === 'done' && Object.keys(overloadWarnings).length > 0 && (
+            <View style={ow.banner}>
+              <Text style={{ fontSize: 16 }}>🔴</Text>
+              <Text style={ow.bannerText}>
+                {Object.keys(overloadWarnings).length === 1
+                  ? '1 task is scheduled on an overloaded day — consider rescheduling to avoid burnout.'
+                  : `${Object.keys(overloadWarnings).length} tasks are on overloaded days — consider spreading them out.`}
+              </Text>
             </View>
           )}
 
