@@ -15,7 +15,7 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { VoiceService } from '../../services/voiceService';
 import { UIObligation } from '../../types';
-import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate, detectDayOverload, OVERLOAD_THRESHOLD } from '../../services/calendarService';
+import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate, detectDayOverload, OVERLOAD_THRESHOLD, cancelCalendarEvent } from '../../services/calendarService';
 
 const { width } = Dimensions.get('window');
 
@@ -468,36 +468,102 @@ function findObligationInText(text: string, obligations: UIObligation[]): UIObli
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── Calendar Conflict Warning Card ────────────────────────────────────────────
-function ConflictWarningCard({ events }: { events: CalendarEvent[] }) {
+// ── Buddy Resolution Card (conflict + overload combined) ─────────────────────
+function BuddyResolutionCard({
+  item,
+  conflictEvents,
+  overload,
+  onResolved,
+}: {
+  item: UIObligation;
+  conflictEvents: CalendarEvent[];
+  overload?: { count: number; events: CalendarEvent[] };
+  onResolved: (eventId: string) => void;
+}) {
+  const [cancelling, setCancelling] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleCancel = async (ev: CalendarEvent) => {
+    setCancelling(ev.id);
+    setError(null);
+    const result = await cancelCalendarEvent(ev.id);
+    setCancelling(null);
+    if (result.ok) {
+      onResolved(ev.id);
+    } else {
+      setError(result.error ?? 'Could not cancel meeting.');
+    }
+  };
+
+  const situationParts: string[] = [];
+  if (conflictEvents.length > 0) {
+    situationParts.push(`"${conflictEvents.map(e => e.title).join('", "')}" overlaps with "${item.title}"`);
+  }
+  if (overload) {
+    situationParts.push(`this day already has ${overload.count} meetings (overload threshold: ${OVERLOAD_THRESHOLD})`);
+  }
+
   return (
-    <View style={cw.card}>
-      <Text style={cw.icon}>⚠️</Text>
-      <View style={{ flex: 1 }}>
-        <Text style={cw.title}>Calendar conflict detected</Text>
-        {events.map(ev => (
-          <Text key={ev.id} style={cw.detail}>
-            "{ev.title}" is already at {fmtTime(ev.startTime)}–{fmtTime(ev.endTime)} on {fmtDate(ev.startTime)}
+    <View style={rc.card}>
+      <View style={rc.header}>
+        <Text style={rc.headerIcon}>⚡</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={rc.headerTitle}>Buddy needs your input</Text>
+          <Text style={rc.headerSub}>
+            {situationParts.join(' · ')}
           </Text>
-        ))}
+        </View>
       </View>
+
+      <Text style={rc.question}>What should Buddy do?</Text>
+
+      {conflictEvents.map(ev => (
+        <TouchableOpacity
+          key={ev.id}
+          style={[rc.actionBtn, cancelling === ev.id && { opacity: 0.6 }]}
+          onPress={() => handleCancel(ev)}
+          disabled={cancelling !== null}
+        >
+          {cancelling === ev.id
+            ? <ActivityIndicator color={C.white} size="small" />
+            : <Text style={rc.actionBtnText}>
+                Cancel "{ev.title}" ({fmtTime(ev.startTime)}–{fmtTime(ev.endTime)}) → Add {item.title}
+              </Text>
+          }
+        </TouchableOpacity>
+      ))}
+
+      {error && <Text style={rc.errorText}>⚠ {error}</Text>}
+
+      {overload && conflictEvents.length === 0 && (
+        <Text style={rc.overloadNote}>
+          🔴 This day has {overload.count} meetings. Consider rescheduling "{item.title}" to a lighter day.
+        </Text>
+      )}
     </View>
   );
 }
-const cw = StyleSheet.create({
-  card:   { flexDirection: 'row', gap: 10, backgroundColor: 'rgba(255,149,0,0.10)', borderRadius: 10, padding: 10, marginTop: 4, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,149,0,0.30)' },
-  icon:   { fontSize: 16, marginTop: 1 },
-  title:  { color: C.orange, fontSize: 12, fontWeight: '700', marginBottom: 3 },
-  detail: { color: C.textSec, fontSize: 11, lineHeight: 16 },
+
+const rc = StyleSheet.create({
+  card:        { backgroundColor: 'rgba(255,149,0,0.08)', borderRadius: 12, padding: 12, marginTop: 6, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,149,0,0.35)' },
+  header:      { flexDirection: 'row', gap: 8, alignItems: 'flex-start', marginBottom: 8 },
+  headerIcon:  { fontSize: 18 },
+  headerTitle: { color: C.orange, fontSize: 13, fontWeight: '700', marginBottom: 2 },
+  headerSub:   { color: C.textSec, fontSize: 11, lineHeight: 16 },
+  question:    { color: C.white, fontSize: 12, fontWeight: '600', marginBottom: 8 },
+  actionBtn:   { backgroundColor: C.crimson, borderRadius: 8, padding: 10, alignItems: 'center', marginBottom: 6 },
+  actionBtnText: { color: C.white, fontSize: 12, fontWeight: '700', textAlign: 'center' },
+  errorText:   { color: C.crimson, fontSize: 11, marginTop: 4 },
+  overloadNote:{ color: C.textSec, fontSize: 11, lineHeight: 16, marginTop: 4 },
 });
 
-// ── Overload Warning Card styles ──────────────────────────────────────────────
+// keep ow defined (used nowhere now but avoids TS errors if referenced elsewhere)
 const ow = StyleSheet.create({
-  card:   { flexDirection: 'row', gap: 10, backgroundColor: 'rgba(255,59,48,0.10)', borderRadius: 10, padding: 10, marginTop: 4, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,59,48,0.30)' },
-  icon:   { fontSize: 16, marginTop: 1 },
-  title:  { color: C.crimson, fontSize: 12, fontWeight: '700', marginBottom: 3 },
-  detail: { color: C.textSec, fontSize: 11, lineHeight: 16 },
-  banner: { flexDirection: 'row', gap: 10, backgroundColor: 'rgba(255,59,48,0.10)', borderRadius: 10, padding: 12, marginTop: 8, marginBottom: 4, borderWidth: 1, borderColor: 'rgba(255,59,48,0.30)' },
+  card:       { flexDirection: 'row', gap: 10, backgroundColor: 'rgba(255,59,48,0.10)', borderRadius: 10, padding: 10, marginTop: 4, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,59,48,0.30)' },
+  icon:       { fontSize: 16, marginTop: 1 },
+  title:      { color: C.crimson, fontSize: 12, fontWeight: '700', marginBottom: 3 },
+  detail:     { color: C.textSec, fontSize: 11, lineHeight: 16 },
+  banner:     { flexDirection: 'row', gap: 10, backgroundColor: 'rgba(255,59,48,0.10)', borderRadius: 10, padding: 12, marginTop: 8, marginBottom: 4, borderWidth: 1, borderColor: 'rgba(255,59,48,0.30)' },
   bannerText: { color: C.crimson, fontSize: 12, fontWeight: '700', flex: 1 },
 });
 
@@ -781,10 +847,10 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
                 {Object.keys(overloadWarnings).length > 0 ? `  ·  🔴 OVERLOAD` : ''}
               </Text>
               {parsed.map(item => {
-                const rc = RISK_COLORS[item.risk as Risk];
+                const riskColor = RISK_COLORS[item.risk as Risk];
                 const conflicts = conflictWarnings.get(item._id);
                 const overload  = overloadWarnings[item._id];
-                const leftColor = conflicts ? C.orange : overload ? C.crimson : rc;
+                const leftColor = conflicts ? C.orange : overload ? C.crimson : riskColor;
                 return (
                   <View key={item._id}>
                     <View style={[bd.parsedCard, { borderLeftColor: leftColor }]}>
@@ -792,22 +858,28 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
                       <View style={{ flex: 1 }}>
                         <Text style={bd.parsedTitle}>{item.title}</Text>
                         <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
-                          <Text style={[bd.parsedRisk, { color: rc }]}>{item.risk.toUpperCase()}</Text>
+                          <Text style={[bd.parsedRisk, { color: riskColor }]}>{item.risk.toUpperCase()}</Text>
                           <Text style={bd.parsedDays}>{getDaysLabel(item.daysUntil)}</Text>
                           {item.amount && <Text style={bd.parsedAmount}>AED {item.amount.toLocaleString()}</Text>}
                         </View>
                       </View>
                       <View style={bd.newBadge}><Text style={bd.newText}>NEW</Text></View>
                     </View>
-                    {conflicts && <ConflictWarningCard events={conflicts} />}
-                    {overload && (
-                      <View style={ow.card}>
-                        <Text style={ow.icon}>🔴</Text>
-                        <View style={{ flex: 1 }}>
-                          <Text style={ow.title}>Day overload — {overload.count} meetings already</Text>
-                          <Text style={ow.detail}>This day has {overload.count} existing meetings (threshold: {OVERLOAD_THRESHOLD}). Consider rescheduling.</Text>
-                        </View>
-                      </View>
+                    {(conflicts || overload) && (
+                      <BuddyResolutionCard
+                        item={item}
+                        conflictEvents={conflicts ?? []}
+                        overload={overload}
+                        onResolved={(eventId) => {
+                          setConflictWarnings(prev => {
+                            const next = new Map(prev);
+                            const remaining = (next.get(item._id) ?? []).filter(e => e.id !== eventId);
+                            if (remaining.length === 0) next.delete(item._id);
+                            else next.set(item._id, remaining);
+                            return next;
+                          });
+                        }}
+                      />
                     )}
                   </View>
                 );
