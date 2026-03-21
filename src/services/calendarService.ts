@@ -68,7 +68,7 @@ export async function fetchUpcomingEvents(daysAhead = 7): Promise<CalendarResult
       const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? now.toISOString();
 
       const attendees: string[] = (item.attendees ?? []).map(
-        (a: any) => a.displayName ?? a.email ?? '',
+        (a: any) => a.email ?? a.displayName ?? '',
       ).filter(Boolean);
 
       // Pull Google Meet link from conferenceData or hangoutLink
@@ -182,7 +182,7 @@ export async function fetchEventsForDateRange(
         startTime:   new Date(startRaw),
         endTime:     new Date(endRaw),
         isAllDay,
-        attendees:   (item.attendees ?? []).map((a: any) => a.displayName ?? a.email ?? '').filter(Boolean),
+        attendees:   (item.attendees ?? []).map((a: any) => a.email ?? a.displayName ?? '').filter(Boolean),
         meetLink:
           item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
           ?? item.hangoutLink ?? '',
@@ -252,7 +252,7 @@ export async function detectDayOverload(date: Date): Promise<DayOverloadResult> 
         startTime:   new Date(startRaw),
         endTime:     new Date(endRaw),
         isAllDay,
-        attendees:   (item.attendees ?? []).map((a: any) => a.displayName ?? a.email ?? '').filter(Boolean),
+        attendees:   (item.attendees ?? []).map((a: any) => a.email ?? a.displayName ?? '').filter(Boolean),
         meetLink:
           item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
           ?? item.hangoutLink ?? '',
@@ -275,9 +275,9 @@ export async function detectDayOverload(date: Date): Promise<DayOverloadResult> 
  * Google automatically sends cancellation emails to all attendees.
  * Requires the calendar.events scope.
  */
-export async function cancelCalendarEvent(eventId: string): Promise<{ ok: boolean; error?: string }> {
+export async function cancelCalendarEvent(eventId: string, accessToken?: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const token = await getAccessToken();
+    const token = accessToken ?? await getAccessToken();
     if (!token) return { ok: false, error: 'Not connected to Google Calendar.' };
 
     const res = await fetch(
@@ -295,6 +295,48 @@ export async function cancelCalendarEvent(eventId: string): Promise<{ ok: boolea
     return { ok: false, error: err?.error?.message ?? `API error ${res.status}` };
   } catch (err: any) {
     return { ok: false, error: err?.message ?? 'Unknown error' };
+  }
+}
+
+
+// ── Send Gmail email ────────────────────────────────────────────────────────────────────
+/**
+ * Sends an email via the Gmail API using the provided access token.
+ * Requires the gmail.send scope.
+ */
+export async function sendGmailEmail(
+  to: string,
+  subject: string,
+  body: string,
+  accessToken: string,
+): Promise<void> {
+  // Construct RFC 2822 message
+  const messageParts = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'Content-Type: text/plain; charset=utf-8',
+    'MIME-Version: 1.0',
+    '',
+    body,
+  ];
+  const message = messageParts.join('
+');
+  const encodedMessage = btoa(unescape(encodeURIComponent(message)))
+    .replace(/[+]/g, '-')
+    .replace(/[/]/g, '_')
+    .replace(/=+$/g, '');
+
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ raw: encodedMessage }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Gmail send failed: ${res.status} ${JSON.stringify(err)}`);
   }
 }
 
@@ -344,7 +386,7 @@ export async function checkTimeConflicts(
         endTime:     new Date(endRaw),
         isAllDay,
         attendees:   (item.attendees ?? [])
-          .map((a: any) => a.displayName ?? a.email ?? '')
+          .map((a: any) => a.email ?? a.displayName ?? '')
           .filter(Boolean),
         meetLink:
           item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
