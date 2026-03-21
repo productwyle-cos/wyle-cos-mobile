@@ -22,6 +22,7 @@ const C = {
   chartreuse: '#D5FF3F',
   salmon:     '#FF9F8A',
   crimson:    '#D7263D',
+  orange:     '#FF7A00',
   white:      '#FEFFFE',
   textSec:    '#8FB8BF',
   textTer:    '#4A7A85',
@@ -583,18 +584,25 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
 
       // ── Conflict check: for items with a specific scheduledTime ─────────────
       const conflictsMap: Record<string, CalendarEvent[]> = {};
+      console.log('[BrainDump] stamped items:', stamped.map(i => ({ id: i._id, title: i.title, scheduledTime: i.scheduledTime })));
       await Promise.all(
         stamped.map(async (item) => {
-          if (!item.scheduledTime) return;
+          if (!item.scheduledTime) {
+            console.log('[BrainDump] SKIP conflict check — no scheduledTime for:', item.title);
+            return;
+          }
           try {
             const start = new Date(item.scheduledTime);
-            if (isNaN(start.getTime())) return;
+            if (isNaN(start.getTime())) { console.log('[BrainDump] SKIP — invalid date for:', item.title, item.scheduledTime); return; }
             const end = new Date(start.getTime() + 60 * 60 * 1000);
+            console.log('[BrainDump] Checking conflicts for:', item.title, 'at', start.toISOString());
             const clashing = await checkTimeConflicts(start, end);
+            console.log('[BrainDump] Clashing events for', item.title, ':', clashing);
             if (clashing.length > 0) conflictsMap[item._id] = clashing;
-          } catch { /* silently skip if calendar not connected */ }
+          } catch (e) { console.log('[BrainDump] Conflict check error:', e); }
         })
       );
+      console.log('[BrainDump] conflictsMap:', conflictsMap);
       setConflicts(conflictsMap);
 
       // ── Overload check: detect days with too many meetings ──────────────────
@@ -606,10 +614,12 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
             const date = new Date(item.scheduledTime);
             if (isNaN(date.getTime())) return;
             const result = await detectDayOverload(date);
+            console.log('[BrainDump] Overload check for', item.title, ':', result);
             if (result.isOverloaded) overloadMap[item._id] = { count: result.count, events: result.events };
-          } catch { /* silently skip if calendar not connected */ }
+          } catch (e) { console.log('[BrainDump] Overload check error:', e); }
         })
       );
+      console.log('[BrainDump] overloadMap:', overloadMap);
       setOverloadWarnings(overloadMap);
 
       setParsed(stamped);
