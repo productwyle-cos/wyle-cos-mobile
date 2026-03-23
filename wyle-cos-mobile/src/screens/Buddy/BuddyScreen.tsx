@@ -506,7 +506,7 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
-      text: input.trim() || (pendingAttachment ? `📎 ${pendingAttachment.name}` : ''),
+      text: input.trim(),
       timestamp: new Date(),
       attachment: pendingAttachment ?? undefined,
     };
