@@ -765,10 +765,51 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
   const sendMessage = async (text: string, speakResponse = false) => {
     if (!text.trim() || loading) return;
 
+    const lower = text.trim().toLowerCase();
+    const isYes = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'confirm', 'do it', 'go ahead',
+                   'add it', 'add', 'create', 'save', 'add to', 'yes add', 'add task'].some(w => lower.includes(w));
+    const isNo  = ['no', 'nope', 'cancel', 'keep', "don't", 'stop', 'skip'].some(w => lower.includes(w));
+
+    // Intercept replies to a pending scan obligation ("yes add it / no skip")
+    if (pendingObligationFromScan) {
+      if (isYes) {
+        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        // Deduplicate: only add if not already in the list
+        const alreadyExists = obligations.some(
+          o => o.title.toLowerCase() === pendingObligationFromScan.title.toLowerCase()
+        );
+        if (!alreadyExists) {
+          addObligation(pendingObligationFromScan);
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(), role: 'buddy',
+            text: `✅ Added "${pendingObligationFromScan.title}" to your Automations list.`,
+            timestamp: new Date(),
+          }]);
+        } else {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(), role: 'buddy',
+            text: `"${pendingObligationFromScan.title}" is already in your Automations list — no duplicate added.`,
+            timestamp: new Date(),
+          }]);
+        }
+        setPendingObligationFromScan(null);
+        scrollToEnd();
+        return;
+      }
+      if (isNo) {
+        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setPendingObligationFromScan(null);
+        setMessages(prev => [...prev, {
+          id: (Date.now() + 1).toString(), role: 'buddy',
+          text: 'No problem — skipped. Let me know if you need anything else.',
+          timestamp: new Date(),
+        }]);
+        scrollToEnd();
+        return;
+      }
+    }
+
     if (pendingResolve) {
-      const lower = text.trim().toLowerCase();
-      const isYes = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'confirm', 'do it', 'go ahead', 'remove it', 'mark it'].some(w => lower.includes(w));
-      const isNo  = ['no', 'nope', 'cancel', 'keep', "don't", 'stop'].some(w => lower.includes(w));
       if (isYes) {
         setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
         handleConfirmResolve(); return;
@@ -1024,14 +1065,25 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
             <TouchableOpacity
               style={s.scanObYes}
               onPress={() => {
-                addObligation(pendingObligationFromScan);
+                const alreadyExists = obligations.some(
+                  o => o.title.toLowerCase() === pendingObligationFromScan.title.toLowerCase()
+                );
+                const ob = pendingObligationFromScan;
                 setPendingObligationFromScan(null);
-                setMessages(prev => [...prev, {
-                  id: Date.now().toString(),
-                  role: 'buddy',
-                  text: `✅ Added "${pendingObligationFromScan.title}" to your Automations list with a reminder.`,
-                  timestamp: new Date(),
-                }]);
+                if (!alreadyExists) {
+                  addObligation(ob);
+                  setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'buddy',
+                    text: `✅ Added "${ob.title}" to your Automations list with a reminder.`,
+                    timestamp: new Date(),
+                  }]);
+                } else {
+                  setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'buddy',
+                    text: `"${ob.title}" is already in your Automations list — no duplicate added.`,
+                    timestamp: new Date(),
+                  }]);
+                }
                 scrollToEnd();
               }}
             >
