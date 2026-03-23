@@ -15,6 +15,7 @@ import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import { uploadFileToDrive, WyleDocMeta } from '../../services/driveService';
 import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
@@ -728,6 +729,37 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         text: buddyText,
         timestamp: new Date(),
       }]);
+
+      // ── Auto-upload to user's Google Drive (fire-and-forget) ────────────────
+      if (extracted) {
+        getAccessToken().then(driveToken => {
+          if (!driveToken) return;
+          const docMeta: WyleDocMeta = {
+            documentType: extracted.document_type   ?? 'file',
+            title:        extracted.title           ?? attachment.name,
+            vendor:       extracted.vendor_or_issuer ?? '',
+            personName:   extracted.person_name     ?? '',
+            amounts:      extracted.amounts         ?? [],
+            dates:        extracted.dates           ?? [],
+            reference:    extracted.reference_number ?? '',
+            summary:      extracted.summary         ?? '',
+            uploadedAt:   new Date().toISOString(),
+            originalName: attachment.name,
+            mimeType:     attachment.mimeType       ?? 'application/octet-stream',
+          };
+          uploadFileToDrive(
+            attachment.uri,
+            attachment.name,
+            attachment.mimeType ?? 'application/octet-stream',
+            docMeta,
+            driveToken,
+          ).then(() => {
+            console.log('[Drive] ✅ Uploaded:', attachment.name);
+          }).catch(err => {
+            console.warn('[Drive] Upload failed (non-blocking):', err.message);
+          });
+        });
+      }
 
     } catch (e: any) {
       setMessages(prev => [...prev, {
