@@ -6,12 +6,15 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   FlatList, KeyboardAvoidingView, Platform, Animated,
-  StatusBar, ActivityIndicator, Dimensions, Alert,
+  StatusBar, ActivityIndicator, Dimensions, Alert, Image, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
@@ -92,7 +95,21 @@ const RESOLVE_TOOL = [{
 }];
 
 type Role = 'user' | 'buddy';
-type Message = { id: string; role: Role; text: string; timestamp: Date };
+type AttachmentType = 'image' | 'pdf' | 'doc' | 'file';
+type Attachment = {
+  uri: string;           // local file URI
+  type: AttachmentType;
+  name: string;          // file name shown in bubble
+  mimeType?: string;
+  base64?: string;       // populated for images — sent to Claude in Phase 2
+};
+type Message = {
+  id: string;
+  role: Role;
+  text: string;
+  timestamp: Date;
+  attachment?: Attachment;
+};
 type VoiceState = 'idle' | 'recording' | 'transcribing';
 
 const QUICK_PROMPTS = [
@@ -234,6 +251,30 @@ const ti = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────────────────
 // Message bubble
 // ─────────────────────────────────────────────────────────────────────────────
+// ── Attachment preview inside a bubble ───────────────────────────────────────
+function AttachmentPreview({ attachment }: { attachment: Attachment }) {
+  const isImage = attachment.type === 'image';
+  if (isImage) {
+    return (
+      <Image
+        source={{ uri: attachment.uri }}
+        style={bub.attachImage}
+        resizeMode="cover"
+      />
+    );
+  }
+  // Non-image: show a file pill
+  const icons: Record<AttachmentType, string> = {
+    image: '🖼️', pdf: '📄', doc: '📝', file: '📎',
+  };
+  return (
+    <View style={bub.filePill}>
+      <Text style={bub.filePillIcon}>{icons[attachment.type] ?? '📎'}</Text>
+      <Text style={bub.filePillName} numberOfLines={1}>{attachment.name}</Text>
+    </View>
+  );
+}
+
 function MessageBubble({ message }: { message: Message }) {
   const isUser  = message.role === 'user';
   const fadeIn  = useRef(new Animated.Value(0)).current;
@@ -250,7 +291,8 @@ function MessageBubble({ message }: { message: Message }) {
     return (
       <Animated.View style={[bub.userRow, { opacity: fadeIn, transform: [{ translateY: slideUp }] }]}>
         <View style={bub.userBubble}>
-          <Text style={bub.userText}>{message.text}</Text>
+          {message.attachment && <AttachmentPreview attachment={message.attachment} />}
+          {message.text ? <Text style={bub.userText}>{message.text}</Text> : null}
         </View>
         <Text style={bub.time}>{time}</Text>
       </Animated.View>
@@ -294,6 +336,19 @@ const bub = StyleSheet.create({
   },
   buddyText:  { color: C.white, fontSize: 15, lineHeight: 22 },
   time:       { color: C.textTer, fontSize: 10, marginTop: 4 },
+  // Attachment styles
+  attachImage: {
+    width: '100%', height: 180, borderRadius: 12,
+    marginBottom: 8, backgroundColor: C.surfaceHi,
+  },
+  filePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: `${C.verdigris}18`,
+    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+    marginBottom: 8, borderWidth: 1, borderColor: `${C.verdigris}30`,
+  },
+  filePillIcon: { fontSize: 18 },
+  filePillName: { color: C.white, fontSize: 13, flex: 1 },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -342,6 +397,14 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
 
   const obligations       = useAppStore(st => st.obligations);
   const resolveObligation = useAppStore(st => st.resolveObligation);
+  const addObligation     = useAppStore(st => st.addObligation);
+
+  // Document type → emoji map (used in extraction + obligation creation)
+  const typeIcon: Record<string, string> = {
+    invoice: '🧾', receipt: '🧾', passport: '🛂', emirates_id: '🪪',
+    national_id: '🪪', insurance_policy: '🛡️', bank_statement: '🏦',
+    visa: '✈️', driving_license: '🚗', other: '📄',
+  };
 
   const [messages, setMessages] = useState<Message[]>([{
     id: '0', role: 'buddy',
@@ -355,11 +418,329 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
   const [isSpeaking, setIsSpeaking]   = useState(false);
   const [pendingResolve, setPendingResolve] = useState<{ id: string; title: string } | null>(null);
 
+  // ── Attachment state ────────────────────────────────────────────────────────
+  const [attachMenuVisible, setAttachMenuVisible]             = useState(false);
+  const [pendingAttachment, setPendingAttachment]             = useState<Attachment | null>(null);
+  const [pendingObligationFromScan, setPendingObligationFromScan] = useState<UIObligation | null>(null);
+
   const recordingRef = useRef<Audio.Recording | null>(null);
   const listRef      = useRef<FlatList>(null);
 
   const scrollToEnd = () =>
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
+
+  // ── Attachment helpers ──────────────────────────────────────────────────────
+  const detectFileType = (mimeType: string, name: string): AttachmentType => {
+    if (mimeType.startsWith('image/')) return 'image';
+    if (mimeType === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+    if (mimeType.includes('word') || name.endsWith('.doc') || name.endsWith('.docx')) return 'doc';
+    return 'file';
+  };
+
+  const handleOpenCamera = async () => {
+    setAttachMenuVisible(false);
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Camera Access', 'Please allow camera access in Settings to scan documents.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      base64: true,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setPendingAttachment({
+        uri: asset.uri,
+        type: 'image',
+        name: 'Camera scan',
+        mimeType: asset.mimeType ?? 'image/jpeg',
+        base64: asset.base64 ?? undefined,
+      });
+    }
+  };
+
+  const handleOpenPhotos = async () => {
+    setAttachMenuVisible(false);
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Photo Library Access', 'Please allow photo library access in Settings.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      base64: true,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setPendingAttachment({
+        uri: asset.uri,
+        type: 'image',
+        name: asset.fileName ?? 'Photo',
+        mimeType: asset.mimeType ?? 'image/jpeg',
+        base64: asset.base64 ?? undefined,
+      });
+    }
+  };
+
+  const handleOpenFiles = async () => {
+    setAttachMenuVisible(false);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/*', 'application/msword',
+               'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        const mimeType = asset.mimeType ?? 'application/octet-stream';
+        setPendingAttachment({
+          uri: asset.uri,
+          type: detectFileType(mimeType, asset.name),
+          name: asset.name,
+          mimeType,
+        });
+      }
+    } catch {
+      Alert.alert('Error', 'Could not open file picker.');
+    }
+  };
+
+  // ── Phase 2: read any file as base64 (web blob URL or native URI) ────────────
+  const readAsBase64 = async (uri: string): Promise<string> => {
+    if (Platform.OS === 'web' || uri.startsWith('blob:') || uri.startsWith('http')) {
+      // Web: fetch the blob URL and convert via FileReader
+      const response = await fetch(uri);
+      const blob     = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result as string;
+          resolve(result.split(',')[1]); // strip "data:...;base64,"
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+    // Native: use expo-file-system
+    return FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+  };
+
+  // ── Phase 2: build the Claude content block for a file ───────────────────────
+  const buildFileContentBlock = async (attachment: Attachment): Promise<any[]> => {
+    const blocks: any[] = [];
+
+    if (attachment.type === 'image') {
+      // Use cached base64 from ImagePicker if available, otherwise read from URI
+      const b64 = attachment.base64 ?? await readAsBase64(attachment.uri);
+      const mediaType = (attachment.mimeType ?? 'image/jpeg') as
+        'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: mediaType, data: b64 },
+      });
+    } else if (attachment.type === 'pdf') {
+      // Claude natively reads PDFs as document blocks
+      const b64 = await readAsBase64(attachment.uri);
+      blocks.push({
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: b64 },
+      });
+    } else {
+      // .doc / .docx / other — best effort: just tell Claude the filename
+      blocks.push({
+        type: 'text',
+        text: `The user uploaded a file named "${attachment.name}" (${attachment.mimeType ?? 'unknown type'}). ` +
+              `This format cannot be read directly. Please let them know you can currently read images and PDFs, ` +
+              `and ask them to re-upload as a PDF or image.`,
+      });
+    }
+    return blocks;
+  };
+
+  // ── Phase 2: extraction prompt sent alongside the document ───────────────────
+  const EXTRACTION_PROMPT = `You are analysing a document uploaded by the user. Extract all key information.
+
+Return a JSON object with these fields (use null for fields you cannot find):
+{
+  "document_type": one of: invoice | receipt | passport | emirates_id | national_id | insurance_policy | bank_statement | visa | driving_license | other,
+  "title": short descriptive title (e.g. "TechMart Invoice #TM-2025-4821"),
+  "vendor_or_issuer": company or authority name,
+  "person_name": person the document belongs to (or null),
+  "reference_number": invoice / policy / ID number (or null),
+  "amounts": [ { "label": "Total", "value": "₹98,825", "currency": "INR" } ],
+  "dates": [ { "label": "Due Date", "date_string": "15 Feb 2025", "iso_date": "2025-02-15" } ],
+  "summary": "2-3 sentence plain English summary of what this document is",
+  "has_trackable_deadline": true or false (true if there is a due date, expiry, or renewal date to track),
+  "suggested_obligation": if has_trackable_deadline is true: { "title": "Pay TechMart Invoice", "due_iso": "2025-02-15", "amount": 98825, "currency": "INR", "category": "finance" } else null
+}
+
+Respond ONLY with the raw JSON object. No markdown, no explanation, no code fences.`;
+
+  // ── Phase 2: format Claude's JSON response into a friendly Buddy message ─────
+  const formatExtractionResponse = (data: any, userCaption: string): string => {
+    const lines: string[] = [];
+
+    // Header line with document type icon
+    const icon = typeIcon[data.document_type] ?? '📄';
+    lines.push(`${icon} **${data.title ?? data.document_type}**`);
+    if (data.vendor_or_issuer) lines.push(`🏢 ${data.vendor_or_issuer}`);
+    if (data.person_name)      lines.push(`👤 ${data.person_name}`);
+    if (data.reference_number) lines.push(`🔖 Ref: ${data.reference_number}`);
+
+    // Amounts
+    if (data.amounts?.length) {
+      lines.push('');
+      data.amounts.forEach((a: any) => lines.push(`💰 ${a.label}: ${a.value}`));
+    }
+
+    // Dates
+    if (data.dates?.length) {
+      lines.push('');
+      data.dates.forEach((d: any) => lines.push(`📅 ${d.label}: ${d.date_string}`));
+    }
+
+    // Summary
+    if (data.summary) {
+      lines.push('');
+      lines.push(data.summary);
+    }
+
+    // Obligation prompt
+    if (data.has_trackable_deadline && data.suggested_obligation) {
+      const ob = data.suggested_obligation;
+      lines.push('');
+      lines.push(`⚡ I can add "${ob.title}" to your Automations list with a reminder${ob.due_iso ? ` for ${ob.due_iso}` : ''}. Want me to do that?`);
+    }
+
+    // User caption (if they typed something alongside the file)
+    if (userCaption) {
+      lines.push('');
+      lines.push(`💬 Your note: "${userCaption}"`);
+    }
+
+    return lines.join('\n');
+  };
+
+  // ── Phase 2: main send-with-attachment handler ────────────────────────────────
+  const sendWithAttachment = async () => {
+    if (!pendingAttachment && !input.trim()) return;
+
+    const caption   = input.trim();
+    const attachment = pendingAttachment;
+
+    // Post user message immediately
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      text: caption,
+      timestamp: new Date(),
+      attachment: attachment ?? undefined,
+    };
+    setMessages(prev => [...prev, userMsg]);
+    setInput('');
+    setPendingAttachment(null);
+    setLoading(true);
+    setShowQuick(false);
+    scrollToEnd();
+
+    try {
+      if (!attachment) {
+        // No attachment — treat as normal text message
+        await sendMessage(caption);
+        return;
+      }
+
+      // Build the multimodal content blocks
+      const fileBlocks = await buildFileContentBlock(attachment);
+      const textBlock  = {
+        type: 'text',
+        text: EXTRACTION_PROMPT + (caption ? `\n\nThe user also wrote: "${caption}"` : ''),
+      };
+
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1024,
+          messages: [{
+            role: 'user',
+            content: [...fileBlocks, textBlock],
+          }],
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message ?? 'API error');
+
+      const rawText = data.content?.[0]?.text ?? '';
+
+      // Try to parse as JSON extraction result
+      let extracted: any = null;
+      try {
+        // Strip any accidental markdown fences
+        const clean = rawText.replace(/```json|```/g, '').trim();
+        extracted = JSON.parse(clean);
+      } catch { /* not JSON — show raw */ }
+
+      let buddyText: string;
+      if (extracted) {
+        buddyText = formatExtractionResponse(extracted, caption);
+
+        // Auto-create obligation if a trackable deadline was found
+        if (extracted.has_trackable_deadline && extracted.suggested_obligation) {
+          const ob = extracted.suggested_obligation;
+          const daysUntil = ob.due_iso
+            ? Math.ceil((new Date(ob.due_iso).getTime() - Date.now()) / 86400000)
+            : 30;
+          const newObligation: UIObligation = {
+            _id:       Date.now().toString(),
+            title:     ob.title,
+            emoji:     typeIcon[extracted.document_type] ?? '📄',
+            daysUntil: Math.max(0, daysUntil),
+            risk:      daysUntil <= 7 ? 'high' : daysUntil <= 30 ? 'medium' : 'low',
+            status:    'active',
+            amount:    ob.amount ?? undefined,
+            category:  ob.category ?? 'finance',
+          };
+          // Store pending obligation — confirmed when user says "yes"
+          setPendingObligationFromScan(newObligation);
+        }
+      } else {
+        buddyText = rawText || "I've reviewed the document. Could you tell me more about what you'd like to do with it?";
+      }
+
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'buddy',
+        text: buddyText,
+        timestamp: new Date(),
+      }]);
+
+    } catch (e: any) {
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'buddy',
+        text: `Sorry, I couldn't analyse that file. ${e.message ?? 'Please try again.'}`,
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setLoading(false);
+      scrollToEnd();
+    }
+  };
 
   // ── Confirm / cancel a pending resolve ─────────────────────────────────────
   const handleConfirmResolve = () => {
@@ -384,10 +765,51 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
   const sendMessage = async (text: string, speakResponse = false) => {
     if (!text.trim() || loading) return;
 
+    const lower = text.trim().toLowerCase();
+    const isYes = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'confirm', 'do it', 'go ahead',
+                   'add it', 'add', 'create', 'save', 'add to', 'yes add', 'add task'].some(w => lower.includes(w));
+    const isNo  = ['no', 'nope', 'cancel', 'keep', "don't", 'stop', 'skip'].some(w => lower.includes(w));
+
+    // Intercept replies to a pending scan obligation ("yes add it / no skip")
+    if (pendingObligationFromScan) {
+      if (isYes) {
+        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        // Deduplicate: only add if not already in the list
+        const alreadyExists = obligations.some(
+          o => o.title.toLowerCase() === pendingObligationFromScan.title.toLowerCase()
+        );
+        if (!alreadyExists) {
+          addObligation(pendingObligationFromScan);
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(), role: 'buddy',
+            text: `✅ Added "${pendingObligationFromScan.title}" to your Automations list.`,
+            timestamp: new Date(),
+          }]);
+        } else {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(), role: 'buddy',
+            text: `"${pendingObligationFromScan.title}" is already in your Automations list — no duplicate added.`,
+            timestamp: new Date(),
+          }]);
+        }
+        setPendingObligationFromScan(null);
+        scrollToEnd();
+        return;
+      }
+      if (isNo) {
+        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setPendingObligationFromScan(null);
+        setMessages(prev => [...prev, {
+          id: (Date.now() + 1).toString(), role: 'buddy',
+          text: 'No problem — skipped. Let me know if you need anything else.',
+          timestamp: new Date(),
+        }]);
+        scrollToEnd();
+        return;
+      }
+    }
+
     if (pendingResolve) {
-      const lower = text.trim().toLowerCase();
-      const isYes = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'confirm', 'do it', 'go ahead', 'remove it', 'mark it'].some(w => lower.includes(w));
-      const isNo  = ['no', 'nope', 'cancel', 'keep', "don't", 'stop'].some(w => lower.includes(w));
       if (isYes) {
         setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
         handleConfirmResolve(); return;
@@ -408,7 +830,12 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
 
     try {
       const history = [...messages, userMsg]
-        .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant' as const, content: m.text }));
+        .map(m => ({
+          role: m.role === 'user' ? 'user' : 'assistant' as const,
+          // Use a placeholder for file-only messages so Claude API never receives empty content
+          content: m.text.trim() || (m.attachment ? `[User uploaded a ${m.attachment.type}: ${m.attachment.name}]` : '[message]'),
+        }))
+        .filter(m => m.content.trim().length > 0);
 
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -609,7 +1036,7 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
           </View>
         )}
 
-        {/* Confirmation bar — appears when Buddy asks to resolve */}
+        {/* Confirmation bar — appears when Buddy asks to resolve obligation */}
         {pendingResolve && (
           <View style={s.confirmBar}>
             <TouchableOpacity style={s.confirmYes} onPress={handleConfirmResolve}>
@@ -621,25 +1048,108 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
           </View>
         )}
 
+        {/* Scan obligation bar — appears after document extraction finds a deadline */}
+        {pendingObligationFromScan && (
+          <View style={s.scanObBar}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.scanObTitle}>
+                {typeIcon[pendingObligationFromScan.category ?? ''] ?? '📋'} Add to Automations?
+              </Text>
+              <Text style={s.scanObSub} numberOfLines={1}>
+                {pendingObligationFromScan.title}
+                {pendingObligationFromScan.amount
+                  ? `  ·  ${pendingObligationFromScan.amount.toLocaleString()}`
+                  : ''}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={s.scanObYes}
+              onPress={() => {
+                const alreadyExists = obligations.some(
+                  o => o.title.toLowerCase() === pendingObligationFromScan.title.toLowerCase()
+                );
+                const ob = pendingObligationFromScan;
+                setPendingObligationFromScan(null);
+                if (!alreadyExists) {
+                  addObligation(ob);
+                  setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'buddy',
+                    text: `✅ Added "${ob.title}" to your Automations list with a reminder.`,
+                    timestamp: new Date(),
+                  }]);
+                } else {
+                  setMessages(prev => [...prev, {
+                    id: Date.now().toString(), role: 'buddy',
+                    text: `"${ob.title}" is already in your Automations list — no duplicate added.`,
+                    timestamp: new Date(),
+                  }]);
+                }
+                scrollToEnd();
+              }}
+            >
+              <Text style={s.scanObYesText}>Add ✓</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.scanObNo}
+              onPress={() => setPendingObligationFromScan(null)}
+            >
+              <Text style={s.scanObNoText}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Pending attachment preview strip */}
+        {pendingAttachment && (
+          <View style={s.attachPreviewBar}>
+            {pendingAttachment.type === 'image' ? (
+              <Image source={{ uri: pendingAttachment.uri }} style={s.attachThumb} resizeMode="cover" />
+            ) : (
+              <View style={s.attachFileBadge}>
+                <Text style={s.attachFileBadgeText}>
+                  {pendingAttachment.type === 'pdf' ? '📄' : '📝'} {pendingAttachment.name}
+                </Text>
+              </View>
+            )}
+            <TouchableOpacity style={s.attachRemove} onPress={() => setPendingAttachment(null)}>
+              <Text style={s.attachRemoveText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Input bar */}
         <View style={s.inputBar}>
+          {/* + Attach button */}
+          <TouchableOpacity
+            style={s.attachBtn}
+            onPress={() => setAttachMenuVisible(true)}
+            disabled={voiceState !== 'idle'}
+          >
+            <Text style={s.attachBtnText}>＋</Text>
+          </TouchableOpacity>
+
           <TextInput
             style={s.input}
             value={input}
             onChangeText={setInput}
-            placeholder={voiceState === 'recording' ? 'Listening...' : 'Ask Buddy anything...'}
+            placeholder={
+              pendingAttachment
+                ? 'Add a message (optional)...'
+                : voiceState === 'recording'
+                  ? 'Listening...'
+                  : 'Ask Buddy anything...'
+            }
             placeholderTextColor={voiceState === 'recording' ? C.salmon : C.textTer}
             multiline
             maxLength={500}
             returnKeyType="send"
             blurOnSubmit
-            onSubmitEditing={() => sendMessage(input)}
+            onSubmitEditing={() => pendingAttachment ? sendWithAttachment() : sendMessage(input)}
             editable={voiceState === 'idle'}
           />
           <TouchableOpacity
-            style={[s.sendBtn, (!input.trim() || loading || voiceState !== 'idle') && { opacity: 0.35 }]}
-            onPress={() => sendMessage(input)}
-            disabled={!input.trim() || loading || voiceState !== 'idle'}
+            style={[s.sendBtn, ((!input.trim() && !pendingAttachment) || loading || voiceState !== 'idle') && { opacity: 0.35 }]}
+            onPress={() => pendingAttachment ? sendWithAttachment() : sendMessage(input)}
+            disabled={(!input.trim() && !pendingAttachment) || loading || voiceState !== 'idle'}
           >
             {loading
               ? <ActivityIndicator color={C.bg} size="small" />
@@ -647,6 +1157,57 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
             }
           </TouchableOpacity>
         </View>
+
+        {/* Attachment menu modal */}
+        <Modal
+          visible={attachMenuVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setAttachMenuVisible(false)}
+        >
+          <TouchableOpacity
+            style={s.attachOverlay}
+            activeOpacity={1}
+            onPress={() => setAttachMenuVisible(false)}
+          >
+            <View style={s.attachSheet}>
+              <View style={s.attachHandle} />
+              <Text style={s.attachSheetTitle}>Add Attachment</Text>
+              <Text style={s.attachSheetSub}>Buddy will scan and extract key details</Text>
+
+              <TouchableOpacity style={s.attachOption} onPress={handleOpenCamera}>
+                <View style={s.attachOptionIcon}><Text style={{ fontSize: 24 }}>📷</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.attachOptionLabel}>Camera</Text>
+                  <Text style={s.attachOptionSub}>Scan a document or ID card live</Text>
+                </View>
+                <Text style={s.attachOptionArrow}>›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={s.attachOption} onPress={handleOpenPhotos}>
+                <View style={s.attachOptionIcon}><Text style={{ fontSize: 24 }}>🖼️</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.attachOptionLabel}>Photos</Text>
+                  <Text style={s.attachOptionSub}>Pick an image from your gallery</Text>
+                </View>
+                <Text style={s.attachOptionArrow}>›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={s.attachOption} onPress={handleOpenFiles}>
+                <View style={s.attachOptionIcon}><Text style={{ fontSize: 24 }}>📁</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.attachOptionLabel}>Files</Text>
+                  <Text style={s.attachOptionSub}>Upload a PDF, Word doc, or image</Text>
+                </View>
+                <Text style={s.attachOptionArrow}>›</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={s.attachCancel} onPress={() => setAttachMenuVisible(false)}>
+                <Text style={s.attachCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
       </KeyboardAvoidingView>
 
       {/* ── Tab Bar ─────────────────────────────────────────────────────────── */}
@@ -716,10 +1277,31 @@ const s = StyleSheet.create({
   confirmNo:      { flex: 1, backgroundColor: C.surface, borderRadius: 999, paddingVertical: 13, alignItems: 'center', borderWidth: 1, borderColor: C.border },
   confirmNoText:  { color: C.textSec, fontSize: 14, fontWeight: '600' },
 
+  // ── Scan obligation confirmation bar
+  scanObBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderTopWidth: 1, borderColor: `${C.chartreuse}28`,
+    backgroundColor: `${C.chartreuse}08`,
+  },
+  scanObTitle: { color: C.chartreuse, fontSize: 12, fontWeight: '700', marginBottom: 2 },
+  scanObSub:   { color: C.textSec, fontSize: 12 },
+  scanObYes: {
+    backgroundColor: C.chartreuse, borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 9,
+  },
+  scanObYesText: { color: C.bg, fontSize: 13, fontWeight: '700' },
+  scanObNo: {
+    backgroundColor: C.surfaceEl, borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 9,
+    borderWidth: 1, borderColor: C.border,
+  },
+  scanObNoText: { color: C.textSec, fontSize: 13, fontWeight: '600' },
+
   // ── Input bar
   inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: 10,
-    paddingHorizontal: 16, paddingVertical: 10,
+    flexDirection: 'row', alignItems: 'flex-end', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 10,
     borderTopWidth: 1, borderColor: C.border, backgroundColor: C.bg,
   },
   input: {
@@ -730,6 +1312,79 @@ const s = StyleSheet.create({
   },
   sendBtn:  { width: 44, height: 44, borderRadius: 22, backgroundColor: C.chartreuse, alignItems: 'center', justifyContent: 'center' },
   sendIcon: { color: C.bg, fontSize: 22, fontWeight: '700', lineHeight: 26 },
+
+  // ── Attach button
+  attachBtn: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: C.surfaceEl,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: C.border,
+  },
+  attachBtnText: { color: C.verdigris, fontSize: 22, lineHeight: 26, fontWeight: '300' },
+
+  // ── Pending attachment preview strip
+  attachPreviewBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderTopWidth: 1, borderColor: C.border, backgroundColor: C.surface,
+  },
+  attachThumb: {
+    width: 54, height: 54, borderRadius: 10,
+    backgroundColor: C.surfaceHi,
+  },
+  attachFileBadge: {
+    flex: 1, backgroundColor: `${C.verdigris}14`,
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8,
+    borderWidth: 1, borderColor: `${C.verdigris}28`,
+  },
+  attachFileBadgeText: { color: C.white, fontSize: 13 },
+  attachRemove: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: C.surfaceHi,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  attachRemoveText: { color: C.textSec, fontSize: 13, fontWeight: '700' },
+
+  // ── Attachment bottom-sheet modal
+  attachOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  attachSheet: {
+    backgroundColor: C.surface,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingBottom: 36, paddingTop: 12,
+  },
+  attachHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: C.surfaceHi, alignSelf: 'center', marginBottom: 20,
+  },
+  attachSheetTitle: {
+    color: C.white, fontSize: 17, fontWeight: '700', marginBottom: 4,
+  },
+  attachSheetSub: {
+    color: C.textSec, fontSize: 13, marginBottom: 20,
+  },
+  attachOption: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 16,
+    borderBottomWidth: 1, borderColor: C.border,
+  },
+  attachOptionIcon: {
+    width: 46, height: 46, borderRadius: 14,
+    backgroundColor: C.surfaceEl,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  attachOptionLabel: { color: C.white, fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  attachOptionSub:   { color: C.textSec, fontSize: 12 },
+  attachOptionArrow: { color: C.textTer, fontSize: 20, fontWeight: '300' },
+  attachCancel: {
+    marginTop: 18, alignItems: 'center',
+    paddingVertical: 14,
+    backgroundColor: C.surfaceEl,
+    borderRadius: 14,
+  },
+  attachCancelText: { color: C.textSec, fontSize: 15, fontWeight: '600' },
 
   // ── Tab bar
   tabBar: {
