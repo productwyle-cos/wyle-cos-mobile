@@ -10,7 +10,6 @@ import {
   Dimensions, StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
 import { getAccessToken, isGoogleConnected } from '../../services/googleAuthService';
 import { listWyleDocs, deleteWyleDoc, WyleDriveDoc } from '../../services/driveService';
 import type { NavProp } from '../../../app/index';
@@ -243,7 +242,7 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
   }, []);
 
   // Reload every time the tab is focused
-  useFocusEffect(useCallback(() => { loadDocs(); }, [loadDocs]));
+  useEffect(() => { loadDocs(); }, [loadDocs]);
 
   const handleDelete = async (doc: WyleDriveDoc) => {
     try {

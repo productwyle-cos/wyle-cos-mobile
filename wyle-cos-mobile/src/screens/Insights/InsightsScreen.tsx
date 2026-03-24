@@ -146,7 +146,7 @@ const TAB_ITEMS = [
   { key: 'home',        icon: '⊙',  label: 'Home'        },
   { key: 'obligations', icon: '✦',  label: 'Automations' },
   { key: 'buddy',       icon: 'orb', label: ''            },
-  { key: 'insights',    icon: '▦',  label: 'Insights'    },
+  { key: 'wallet',     icon: '🗂️', label: 'Wallet'      },
   { key: 'connect',     icon: '◈',  label: 'Profile'     },
 ];
 
