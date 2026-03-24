@@ -7,12 +7,74 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   ActivityIndicator, Linking, RefreshControl,
-  Dimensions, StatusBar, Modal,
+  Dimensions, StatusBar, Modal, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import { getAccessToken, isGoogleConnected } from '../../services/googleAuthService';
-import { listWyleDocs, deleteWyleDoc, WyleDriveDoc } from '../../services/driveService';
+import {
+  listWyleDocs, deleteWyleDoc, uploadFileToDrive,
+  findDuplicateDoc, computeContentHash,
+  WyleDriveDoc, WyleDocMeta,
+} from '../../services/driveService';
 import type { NavProp } from '../../../app/index';
+
+const ANTHROPIC_API_KEY = (process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '') as string;
+
+const EXTRACTION_PROMPT = `You are analysing a document uploaded by the user. Extract all key information.
+
+Return a JSON object with these fields (use null for fields you cannot find):
+{
+  "document_type": one of: invoice | receipt | passport | emirates_id | national_id | insurance_policy | bank_statement | visa | driving_license | other,
+  "title": short descriptive title (e.g. "TechMart Invoice #TM-2025-4821"),
+  "vendor_or_issuer": company or authority name,
+  "person_name": person the document belongs to (or null),
+  "reference_number": invoice / policy / ID number (or null),
+  "amounts": [ { "label": "Total", "value": "₹98,825", "currency": "INR" } ],
+  "dates": [ { "label": "Due Date", "date_string": "15 Feb 2025", "iso_date": "2025-02-15" } ],
+  "summary": "2-3 sentence plain English summary of what this document is",
+  "has_trackable_deadline": true or false,
+  "suggested_obligation": null
+}
+
+Respond ONLY with the raw JSON object. No markdown, no explanation, no code fences.`;
+
+async function readAsBase64(uri: string): Promise<string> {
+  if (Platform.OS === 'web') {
+    return new Promise<string>((resolve, reject) => {
+      fetch(uri).then(r => r.blob()).then(blob => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror  = reject;
+        reader.readAsDataURL(blob);
+      }).catch(reject);
+    });
+  }
+  return FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+}
+
+async function buildFileBlocks(
+  uri: string, mimeType: string, name: string, base64?: string,
+): Promise<any[]> {
+  const isImage = mimeType.startsWith('image/');
+  const isPdf   = mimeType === 'application/pdf';
+
+  if (isImage) {
+    const b64 = base64 ?? await readAsBase64(uri);
+    return [{ type: 'image', source: { type: 'base64', media_type: mimeType, data: b64 } }];
+  }
+  if (isPdf) {
+    const b64 = base64 ?? await readAsBase64(uri);
+    return [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }];
+  }
+  return [{
+    type: 'text',
+    text: `The user uploaded a file named "${name}" (${mimeType}). ` +
+          `This format cannot be read directly. Please let them know you can read images and PDFs.`,
+  }];
+}
 
 const { width } = Dimensions.get('window');
 
@@ -212,6 +274,11 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
   const [confirmDoc, setConfirmDoc] = useState<WyleDriveDoc | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // ── Direct upload state ────────────────────────────────────────────────────
+  const [uploadMenuVisible, setUploadMenuVisible] = useState(false);
+  const [uploading, setUploading]                 = useState(false);
+  const [uploadStatus, setUploadStatus]           = useState('');   // progress label
+
   const loadDocs = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true); else setLoading(true);
     try {
@@ -245,6 +312,121 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
     } catch (e: any) {
       setDeleteError(`Could not delete document: ${e.message}`);
     }
+  };
+
+  // ── Direct upload handler ──────────────────────────────────────────────────
+  const processAndUpload = async (
+    uri: string, name: string, mimeType: string, base64?: string,
+  ) => {
+    setUploadMenuVisible(false);
+    setUploading(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('Not signed in to Google');
+
+      // Read base64 if not already provided
+      const b64 = base64 ?? await readAsBase64(uri);
+
+      // Duplicate check
+      setUploadStatus('Checking for duplicates…');
+      const contentHash = computeContentHash(b64);
+      const duplicate   = await findDuplicateDoc(name, contentHash, token).catch(() => null);
+      if (duplicate) {
+        const uploadedOn = new Date(duplicate.uploadedAt).toLocaleDateString('en-AE', {
+          day: 'numeric', month: 'short', year: 'numeric',
+        });
+        setDeleteError(`"${duplicate.title}" is already in your Wallet (scanned ${uploadedOn}).`);
+        return;
+      }
+
+      // Extract with Claude
+      setUploadStatus('Extracting document info…');
+      const blocks = await buildFileBlocks(uri, mimeType, name, b64);
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1024,
+          messages: [{ role: 'user', content: [...blocks, { type: 'text', text: EXTRACTION_PROMPT }] }],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message ?? 'Claude API error');
+
+      let extracted: any = null;
+      try {
+        extracted = JSON.parse(data.content?.[0]?.text?.replace(/```json|```/g, '').trim() ?? '');
+      } catch { /* use fallback metadata */ }
+
+      // Upload to Drive
+      setUploadStatus('Saving to Google Drive…');
+      const docMeta: WyleDocMeta = {
+        documentType: extracted?.document_type    ?? 'other',
+        title:        extracted?.title            ?? name,
+        vendor:       extracted?.vendor_or_issuer ?? '',
+        personName:   extracted?.person_name      ?? '',
+        amounts:      extracted?.amounts          ?? [],
+        dates:        extracted?.dates            ?? [],
+        reference:    extracted?.reference_number ?? '',
+        summary:      extracted?.summary          ?? '',
+        uploadedAt:   new Date().toISOString(),
+        originalName: name,
+        mimeType,
+        contentHash,
+      };
+      await uploadFileToDrive(uri, name, mimeType, docMeta, token);
+
+      // Refresh the list
+      setUploadStatus('Done!');
+      await loadDocs();
+    } catch (e: any) {
+      setDeleteError(`Upload failed: ${e.message}`);
+    } finally {
+      setUploading(false);
+      setUploadStatus('');
+    }
+  };
+
+  const handlePickCamera = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) { setDeleteError('Camera permission denied.'); return; }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      base64: true, quality: 0.85,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    const name  = asset.fileName ?? `scan_${Date.now()}.jpg`;
+    await processAndUpload(asset.uri, name, asset.mimeType ?? 'image/jpeg', asset.base64 ?? undefined);
+  };
+
+  const handlePickPhotos = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { setDeleteError('Photo library permission denied.'); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      base64: true, quality: 0.85,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    const name  = asset.fileName ?? `photo_${Date.now()}.jpg`;
+    await processAndUpload(asset.uri, name, asset.mimeType ?? 'image/jpeg', asset.base64 ?? undefined);
+  };
+
+  const handlePickFiles = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ['application/pdf', 'image/*'],
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    await processAndUpload(asset.uri, asset.name, asset.mimeType ?? 'application/octet-stream');
   };
 
   // Filter docs
@@ -290,12 +472,29 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
                 : 'Your scanned documents live here'}
             </Text>
           </View>
-          <TouchableOpacity style={s.driveBtn} onPress={() =>
-            Linking.openURL('https://drive.google.com').catch(() => {})
-          }>
-            <Text style={s.driveBtnText}>📁 Drive</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity
+              style={s.uploadBtn}
+              onPress={() => setUploadMenuVisible(true)}
+              disabled={uploading}
+            >
+              <Text style={s.uploadBtnText}>＋ Upload</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.driveBtn} onPress={() =>
+              Linking.openURL('https://drive.google.com').catch(() => {})
+            }>
+              <Text style={s.driveBtnText}>📁 Drive</Text>
+            </TouchableOpacity>
+          </View>
         </View>
+
+        {/* Upload progress banner */}
+        {uploading && (
+          <View style={s.uploadBanner}>
+            <ActivityIndicator color={C.verdigris} size="small" />
+            <Text style={s.uploadBannerText}>{uploadStatus || 'Processing…'}</Text>
+          </View>
+        )}
 
         {/* Filter tabs */}
         <View style={s.filterRow}>
@@ -351,6 +550,53 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
           />
         )}
       </SafeAreaView>
+
+      {/* ── Upload source menu ──────────────────────────────────── */}
+      <Modal
+        visible={uploadMenuVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setUploadMenuVisible(false)}
+      >
+        <TouchableOpacity
+          style={upMenu.overlay}
+          activeOpacity={1}
+          onPress={() => setUploadMenuVisible(false)}
+        >
+          <View style={upMenu.sheet}>
+            <View style={upMenu.handle} />
+            <Text style={upMenu.title}>Add Document</Text>
+
+            <TouchableOpacity style={upMenu.row} onPress={handlePickCamera}>
+              <View style={upMenu.iconWrap}><Text style={upMenu.icon}>📷</Text></View>
+              <View style={upMenu.rowText}>
+                <Text style={upMenu.rowLabel}>Camera</Text>
+                <Text style={upMenu.rowSub}>Take a photo of a document</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={upMenu.row} onPress={handlePickPhotos}>
+              <View style={upMenu.iconWrap}><Text style={upMenu.icon}>🖼️</Text></View>
+              <View style={upMenu.rowText}>
+                <Text style={upMenu.rowLabel}>Photo Library</Text>
+                <Text style={upMenu.rowSub}>Choose an existing photo</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={upMenu.row} onPress={handlePickFiles}>
+              <View style={upMenu.iconWrap}><Text style={upMenu.icon}>📄</Text></View>
+              <View style={upMenu.rowText}>
+                <Text style={upMenu.rowLabel}>Files</Text>
+                <Text style={upMenu.rowSub}>Pick a PDF or image file</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={upMenu.cancelBtn} onPress={() => setUploadMenuVisible(false)}>
+              <Text style={upMenu.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* ── Delete confirmation modal ────────────────────────────── */}
       <Modal
@@ -453,6 +699,63 @@ const s = StyleSheet.create({
   connectBtnText: { color: C.white, fontSize: 15, fontWeight: '700' },
 
   loadingText: { color: C.textSec, fontSize: 14, marginTop: 12 },
+
+  uploadBtn: {
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: 12, backgroundColor: C.verdigris,
+  },
+  uploadBtnText: { color: C.white, fontSize: 13, fontWeight: '700' },
+
+  uploadBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginHorizontal: 20, marginBottom: 10,
+    backgroundColor: `${C.verdigris}18`,
+    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
+    borderWidth: 1, borderColor: `${C.verdigris}30`,
+  },
+  uploadBannerText: { color: C.verdigris, fontSize: 13, fontWeight: '600' },
+});
+
+const upMenu = StyleSheet.create({
+  overlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: C.surface,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingBottom: 36, paddingTop: 12,
+  },
+  handle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: C.textTer, alignSelf: 'center', marginBottom: 18,
+  },
+  title: {
+    color: C.white, fontSize: 17, fontWeight: '800',
+    marginBottom: 16,
+  },
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  iconWrap: {
+    width: 48, height: 48, borderRadius: 14,
+    backgroundColor: C.surfaceEl,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: C.border,
+  },
+  icon:     { fontSize: 22 },
+  rowText:  { flex: 1 },
+  rowLabel: { color: C.white, fontSize: 15, fontWeight: '700' },
+  rowSub:   { color: C.textSec, fontSize: 12, marginTop: 2 },
+  cancelBtn: {
+    marginTop: 16, alignItems: 'center',
+    paddingVertical: 14, borderRadius: 14,
+    backgroundColor: C.surfaceEl,
+    borderWidth: 1, borderColor: C.border,
+  },
+  cancelText: { color: C.textSec, fontSize: 15, fontWeight: '700' },
 });
 
 const modal = StyleSheet.create({
