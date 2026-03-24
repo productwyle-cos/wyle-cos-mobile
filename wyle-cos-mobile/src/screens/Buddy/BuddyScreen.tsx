@@ -113,6 +113,11 @@ type Message = {
 };
 type VoiceState = 'idle' | 'recording' | 'transcribing';
 
+// Guaranteed unique message ID — avoids duplicate-key warning when two
+// messages are created within the same millisecond
+let _msgCounter = 0;
+const uid = () => `${Date.now()}_${++_msgCounter}`;
+
 const QUICK_PROMPTS = [
   { label: '📋 Urgent items',  text: 'What are my most urgent tasks right now?' },
   { label: '🛂 Visa help',     text: 'Help me renew my UAE residence visa.' },
@@ -638,7 +643,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
 
     // Post user message immediately
     const userMsg: Message = {
-      id: Date.now().toString(),
+      id: uid(),
       role: 'user',
       text: caption,
       timestamp: new Date(),
@@ -724,7 +729,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       }
 
       setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
+        id: uid(),
         role: 'buddy',
         text: buddyText,
         timestamp: new Date(),
@@ -763,7 +768,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
 
     } catch (e: any) {
       setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
+        id: uid(),
         role: 'buddy',
         text: `Sorry, I couldn't analyse that file. ${e.message ?? 'Please try again.'}`,
         timestamp: new Date(),
@@ -779,7 +784,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     if (!pendingResolve) return;
     resolveObligation(pendingResolve.id);
     const msg = `✅ Done! "${pendingResolve.title}" is marked as completed and removed from your active list.`;
-    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'buddy', text: msg, timestamp: new Date() }]);
+    setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: msg, timestamp: new Date() }]);
     speakText(`Done! ${pendingResolve.title} has been marked as completed.`);
     setPendingResolve(null);
     scrollToEnd();
@@ -788,7 +793,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
   const handleCancelResolve = () => {
     if (!pendingResolve) return;
     const msg = `No problem! "${pendingResolve.title}" stays in your active list.`;
-    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'buddy', text: msg, timestamp: new Date() }]);
+    setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: msg, timestamp: new Date() }]);
     setPendingResolve(null);
     scrollToEnd();
   };
@@ -805,7 +810,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     // Intercept replies to a pending scan obligation ("yes add it / no skip")
     if (pendingObligationFromScan) {
       if (isYes) {
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'user', text, timestamp: new Date() }]);
         // Deduplicate: only add if not already in the list
         const alreadyExists = obligations.some(
           o => o.title.toLowerCase() === pendingObligationFromScan.title.toLowerCase()
@@ -813,13 +818,13 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         if (!alreadyExists) {
           addObligation(pendingObligationFromScan);
           setMessages(prev => [...prev, {
-            id: (Date.now() + 1).toString(), role: 'buddy',
+            id: uid(), role: 'buddy',
             text: `✅ Added "${pendingObligationFromScan.title}" to your Automations list.`,
             timestamp: new Date(),
           }]);
         } else {
           setMessages(prev => [...prev, {
-            id: (Date.now() + 1).toString(), role: 'buddy',
+            id: uid(), role: 'buddy',
             text: `"${pendingObligationFromScan.title}" is already in your Automations list — no duplicate added.`,
             timestamp: new Date(),
           }]);
@@ -829,10 +834,10 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         return;
       }
       if (isNo) {
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'user', text, timestamp: new Date() }]);
         setPendingObligationFromScan(null);
         setMessages(prev => [...prev, {
-          id: (Date.now() + 1).toString(), role: 'buddy',
+          id: uid(), role: 'buddy',
           text: 'No problem — skipped. Let me know if you need anything else.',
           timestamp: new Date(),
         }]);
@@ -843,11 +848,11 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
 
     if (pendingResolve) {
       if (isYes) {
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'user', text, timestamp: new Date() }]);
         handleConfirmResolve(); return;
       }
       if (isNo) {
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'user', text, timestamp: new Date() }]);
         handleCancelResolve(); return;
       }
     }
@@ -855,7 +860,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     setShowQuick(false);
     setInput('');
 
-    const userMsg: Message = { id: Date.now().toString(), role: 'user', text: text.trim(), timestamp: new Date() };
+    const userMsg: Message = { id: uid(), role: 'user', text: text.trim(), timestamp: new Date() };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     scrollToEnd();
@@ -895,19 +900,19 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
           const { obligation_id, obligation_title } = toolUse.input;
           setPendingResolve({ id: obligation_id, title: obligation_title });
           const askText = `Should I mark "${obligation_title}" as completed and remove it from your active list?`;
-          setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'buddy', text: askText, timestamp: new Date() }]);
+          setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: askText, timestamp: new Date() }]);
           if (speakResponse) speakText(`Should I mark ${obligation_title} as completed and remove it from your list?`);
           return;
         }
       }
 
       const responseText = data.content?.[0]?.text ?? "Something went wrong. Try again?";
-      const buddyMsg: Message = { id: (Date.now() + 1).toString(), role: 'buddy', text: responseText, timestamp: new Date() };
+      const buddyMsg: Message = { id: uid(), role: 'buddy', text: responseText, timestamp: new Date() };
       setMessages(prev => [...prev, buddyMsg]);
       if (speakResponse) speakText(responseText);
     } catch {
       const fallback = "I'm having a connection issue. Your most urgent item is your UAE visa — it expires in 8 days. Want me to walk you through the GDRFA renewal process?";
-      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'buddy', text: fallback, timestamp: new Date() }]);
+      setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: fallback, timestamp: new Date() }]);
       if (speakResponse) speakText(fallback);
     } finally {
       setLoading(false);
@@ -1105,13 +1110,13 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
                 if (!alreadyExists) {
                   addObligation(ob);
                   setMessages(prev => [...prev, {
-                    id: Date.now().toString(), role: 'buddy',
+                    id: uid(), role: 'buddy',
                     text: `✅ Added "${ob.title}" to your Automations list with a reminder.`,
                     timestamp: new Date(),
                   }]);
                 } else {
                   setMessages(prev => [...prev, {
-                    id: Date.now().toString(), role: 'buddy',
+                    id: uid(), role: 'buddy',
                     text: `"${ob.title}" is already in your Automations list — no duplicate added.`,
                     timestamp: new Date(),
                   }]);
