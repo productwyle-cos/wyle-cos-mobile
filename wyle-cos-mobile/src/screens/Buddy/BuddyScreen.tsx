@@ -16,6 +16,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { uploadFileToDrive, WyleDocMeta } from '../../services/driveService';
+import { getAccessToken } from '../../services/googleAuthService';
 import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
@@ -638,8 +639,9 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
   const sendWithAttachment = async () => {
     if (!pendingAttachment && !input.trim()) return;
 
-    const caption   = input.trim();
+    const caption    = input.trim();
     const attachment = pendingAttachment;
+    let extractedForDrive: any = null;   // captured outside try so Drive upload runs after finally
 
     // Post user message immediately
     const userMsg: Message = {
@@ -699,6 +701,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         // Strip any accidental markdown fences
         const clean = rawText.replace(/```json|```/g, '').trim();
         extracted = JSON.parse(clean);
+        extractedForDrive = extracted;   // capture for Drive upload after finally
       } catch { /* not JSON — show raw */ }
 
       let buddyText: string;
@@ -735,37 +738,6 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         timestamp: new Date(),
       }]);
 
-      // ── Auto-upload to user's Google Drive (fire-and-forget) ────────────────
-      if (extracted) {
-        getAccessToken().then(driveToken => {
-          if (!driveToken) return;
-          const docMeta: WyleDocMeta = {
-            documentType: extracted.document_type   ?? 'file',
-            title:        extracted.title           ?? attachment.name,
-            vendor:       extracted.vendor_or_issuer ?? '',
-            personName:   extracted.person_name     ?? '',
-            amounts:      extracted.amounts         ?? [],
-            dates:        extracted.dates           ?? [],
-            reference:    extracted.reference_number ?? '',
-            summary:      extracted.summary         ?? '',
-            uploadedAt:   new Date().toISOString(),
-            originalName: attachment.name,
-            mimeType:     attachment.mimeType       ?? 'application/octet-stream',
-          };
-          uploadFileToDrive(
-            attachment.uri,
-            attachment.name,
-            attachment.mimeType ?? 'application/octet-stream',
-            docMeta,
-            driveToken,
-          ).then(() => {
-            console.log('[Drive] ✅ Uploaded:', attachment.name);
-          }).catch(err => {
-            console.warn('[Drive] Upload failed (non-blocking):', err.message);
-          });
-        });
-      }
-
     } catch (e: any) {
       setMessages(prev => [...prev, {
         id: uid(),
@@ -776,6 +748,40 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     } finally {
       setLoading(false);
       scrollToEnd();
+    }
+
+    // ── Auto-upload to user's Google Drive (fire-and-forget, outside try/catch)
+    // Runs after extraction is shown — Drive errors never surface to the user
+    if (extractedForDrive) {
+      getAccessToken().then(driveToken => {
+        if (!driveToken) return;
+        const docMeta: WyleDocMeta = {
+          documentType: extractedForDrive.document_type    ?? 'file',
+          title:        extractedForDrive.title            ?? attachment.name,
+          vendor:       extractedForDrive.vendor_or_issuer ?? '',
+          personName:   extractedForDrive.person_name      ?? '',
+          amounts:      extractedForDrive.amounts          ?? [],
+          dates:        extractedForDrive.dates            ?? [],
+          reference:    extractedForDrive.reference_number ?? '',
+          summary:      extractedForDrive.summary          ?? '',
+          uploadedAt:   new Date().toISOString(),
+          originalName: attachment.name,
+          mimeType:     attachment.mimeType ?? 'application/octet-stream',
+        };
+        uploadFileToDrive(
+          attachment.uri,
+          attachment.name,
+          attachment.mimeType ?? 'application/octet-stream',
+          docMeta,
+          driveToken,
+        ).then(() => {
+          console.log('[Drive] ✅ Uploaded:', attachment.name);
+        }).catch(err => {
+          console.warn('[Drive] Upload failed (non-blocking):', err.message);
+        });
+      }).catch(err => {
+        console.warn('[Drive] getAccessToken failed (non-blocking):', err.message);
+      });
     }
   };
 
