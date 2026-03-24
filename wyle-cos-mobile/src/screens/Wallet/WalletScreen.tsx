@@ -94,54 +94,54 @@ const C = {
   border:     '#2A2A2A',
 };
 
-// ── Document type → icon + colour ────────────────────────────────────────────
-const DOC_CONFIG: Record<string, { icon: string; color: string; label: string }> = {
+// ── Document type → abbr + colour ────────────────────────────────────────────
+const DOC_CONFIG: Record<string, { abbr: string; color: string; label: string }> = {
   // Identity
-  passport:            { icon: '🛂', color: '#4A90D9', label: 'Passport' },
-  emirates_id:         { icon: '🪪', color: '#7B61FF', label: 'Emirates ID' },
-  national_id:         { icon: '🪪', color: '#7B61FF', label: 'National ID' },
-  driving_license:     { icon: '🚗', color: '#FF9500', label: 'Driving License' },
+  passport:             { abbr: 'PASS', color: '#4A90D9', label: 'Passport' },
+  emirates_id:          { abbr: 'EID',  color: '#7B61FF', label: 'Emirates ID' },
+  national_id:          { abbr: 'NID',  color: '#7B61FF', label: 'National ID' },
+  driving_license:      { abbr: 'DL',   color: '#FF9500', label: 'Driving License' },
   // Travel
-  visa:                { icon: '✈️', color: '#1B998B', label: 'Visa' },
-  boarding_pass:       { icon: '🎫', color: '#1B998B', label: 'Boarding Pass' },
-  hotel_booking:       { icon: '🏨', color: '#34C759', label: 'Hotel Booking' },
-  travel_insurance:    { icon: '🌍', color: '#34C759', label: 'Travel Insurance' },
+  visa:                 { abbr: 'VISA', color: '#1B998B', label: 'Visa' },
+  boarding_pass:        { abbr: 'BP',   color: '#1B998B', label: 'Boarding Pass' },
+  hotel_booking:        { abbr: 'HTL',  color: '#34C759', label: 'Hotel Booking' },
+  travel_insurance:     { abbr: 'TI',   color: '#34C759', label: 'Travel Insurance' },
   // Finance
-  invoice:             { icon: '📄', color: '#FF6B6B', label: 'Invoice' },
-  receipt:             { icon: '🧾', color: '#FF9500', label: 'Receipt' },
-  bank_statement:      { icon: '🏦', color: '#4A90D9', label: 'Bank Statement' },
-  insurance_policy:    { icon: '🛡️', color: '#34C759', label: 'Insurance' },
-  tax_document:        { icon: '📊', color: '#FF6B6B', label: 'Tax Document' },
-  payslip:             { icon: '💰', color: '#34C759', label: 'Payslip' },
+  invoice:              { abbr: 'INV',  color: '#FF6B6B', label: 'Invoice' },
+  receipt:              { abbr: 'REC',  color: '#FF9500', label: 'Receipt' },
+  bank_statement:       { abbr: 'BST',  color: '#4A90D9', label: 'Bank Statement' },
+  insurance_policy:     { abbr: 'INS',  color: '#34C759', label: 'Insurance' },
+  tax_document:         { abbr: 'TAX',  color: '#FF6B6B', label: 'Tax Document' },
+  payslip:              { abbr: 'PAY',  color: '#34C759', label: 'Payslip' },
   // Medical
-  medical_report:      { icon: '🏥', color: '#FF6B6B', label: 'Medical Report' },
-  prescription:        { icon: '💊', color: '#FF9500', label: 'Prescription' },
-  vaccination_record:  { icon: '💉', color: '#34C759', label: 'Vaccination' },
-  health_insurance:    { icon: '❤️‍🩹', color: '#FF6B6B', label: 'Health Insurance' },
+  medical_report:       { abbr: 'MED',  color: '#FF6B6B', label: 'Medical Report' },
+  prescription:         { abbr: 'RX',   color: '#FF9500', label: 'Prescription' },
+  vaccination_record:   { abbr: 'VAC',  color: '#34C759', label: 'Vaccination' },
+  health_insurance:     { abbr: 'HI',   color: '#FF6B6B', label: 'Health Insurance' },
   // Legal
-  contract:            { icon: '📝', color: '#7B61FF', label: 'Contract' },
-  agreement:           { icon: '🤝', color: '#7B61FF', label: 'Agreement' },
-  power_of_attorney:   { icon: '⚖️', color: '#7B61FF', label: 'Power of Attorney' },
-  court_document:      { icon: '🏛️', color: '#9A9A9A', label: 'Court Document' },
+  contract:             { abbr: 'CNT',  color: '#7B61FF', label: 'Contract' },
+  agreement:            { abbr: 'AGR',  color: '#7B61FF', label: 'Agreement' },
+  power_of_attorney:    { abbr: 'POA',  color: '#7B61FF', label: 'Power of Attorney' },
+  court_document:       { abbr: 'CRT',  color: '#9A9A9A', label: 'Court Document' },
   // Education
-  certificate:         { icon: '🎓', color: '#FFD60A', label: 'Certificate' },
-  transcript:          { icon: '📚', color: '#FFD60A', label: 'Transcript' },
-  diploma:             { icon: '🏅', color: '#FFD60A', label: 'Diploma' },
-  admission_letter:    { icon: '🎒', color: '#FFD60A', label: 'Admission Letter' },
+  certificate:          { abbr: 'CERT', color: '#D4A017', label: 'Certificate' },
+  transcript:           { abbr: 'TRN',  color: '#D4A017', label: 'Transcript' },
+  diploma:              { abbr: 'DIP',  color: '#D4A017', label: 'Diploma' },
+  admission_letter:     { abbr: 'ADM',  color: '#D4A017', label: 'Admission Letter' },
   // Property
-  lease_agreement:     { icon: '🏠', color: '#FF9500', label: 'Lease Agreement' },
-  utility_bill:        { icon: '💡', color: '#FF9500', label: 'Utility Bill' },
-  property_deed:       { icon: '🏡', color: '#FF9500', label: 'Property Deed' },
+  lease_agreement:      { abbr: 'LSE',  color: '#FF9500', label: 'Lease Agreement' },
+  utility_bill:         { abbr: 'UTL',  color: '#FF9500', label: 'Utility Bill' },
+  property_deed:        { abbr: 'PRD',  color: '#FF9500', label: 'Property Deed' },
   // Work
-  employment_letter:   { icon: '💼', color: '#4A90D9', label: 'Employment Letter' },
-  offer_letter:        { icon: '📩', color: '#4A90D9', label: 'Offer Letter' },
-  noc_letter:          { icon: '📋', color: '#4A90D9', label: 'NOC Letter' },
-  work_permit:         { icon: '🔖', color: '#4A90D9', label: 'Work Permit' },
+  employment_letter:    { abbr: 'EMP',  color: '#4A90D9', label: 'Employment Letter' },
+  offer_letter:         { abbr: 'OFR',  color: '#4A90D9', label: 'Offer Letter' },
+  noc_letter:           { abbr: 'NOC',  color: '#4A90D9', label: 'NOC Letter' },
+  work_permit:          { abbr: 'WP',   color: '#4A90D9', label: 'Work Permit' },
   // Vehicle
-  vehicle_registration: { icon: '🚘', color: '#FF9500', label: 'Vehicle Reg.' },
-  vehicle_insurance:    { icon: '🚗', color: '#34C759', label: 'Vehicle Insurance' },
+  vehicle_registration: { abbr: 'VRG',  color: '#FF9500', label: 'Vehicle Reg.' },
+  vehicle_insurance:    { abbr: 'VI',   color: '#34C759', label: 'Vehicle Insurance' },
   // Fallback
-  other:               { icon: '📎', color: '#9A9A9A', label: 'Document' },
+  other:                { abbr: 'DOC',  color: '#9A9A9A', label: 'Document' },
 };
 
 function getDocConfig(type: string) {
@@ -178,16 +178,16 @@ function getExpiryInfo(dates: WyleDriveDoc['dates']): {
 // ── Filter tabs ───────────────────────────────────────────────────────────────
 const FILTERS = [
   { key: 'all',       label: 'All' },
-  { key: 'id',        label: '🪪 IDs' },
-  { key: 'finance',   label: '💰 Finance' },
-  { key: 'travel',    label: '✈️ Travel' },
-  { key: 'medical',   label: '🏥 Medical' },
-  { key: 'legal',     label: '⚖️ Legal' },
-  { key: 'education', label: '🎓 Education' },
-  { key: 'property',  label: '🏠 Property' },
-  { key: 'work',      label: '💼 Work' },
-  { key: 'vehicle',   label: '🚘 Vehicle' },
-  { key: 'other',     label: '📎 Other' },
+  { key: 'id',        label: 'IDs' },
+  { key: 'finance',   label: 'Finance' },
+  { key: 'travel',    label: 'Travel' },
+  { key: 'medical',   label: 'Medical' },
+  { key: 'legal',     label: 'Legal' },
+  { key: 'education', label: 'Education' },
+  { key: 'property',  label: 'Property' },
+  { key: 'work',      label: 'Work' },
+  { key: 'vehicle',   label: 'Vehicle' },
+  { key: 'other',     label: 'Other' },
 ];
 
 const FILTER_TYPES: Record<string, string[]> = {
@@ -209,7 +209,7 @@ function DocCard({
   onDelete,
 }: {
   doc: WyleDriveDoc;
-  onDelete: (doc: WyleDriveDoc) => void;   // opens confirm modal in parent
+  onDelete: (doc: WyleDriveDoc) => void;
 }) {
   const cfg    = getDocConfig(doc.documentType);
   const expiry = getExpiryInfo(doc.dates);
@@ -218,59 +218,78 @@ function DocCard({
   });
 
   const handleOpen = () => {
-    if (doc.webViewLink) {
-      Linking.openURL(doc.webViewLink).catch(() => {});
-    }
+    if (doc.webViewLink) Linking.openURL(doc.webViewLink).catch(() => {});
   };
 
-  const handleDelete = () => onDelete(doc);
-
   return (
-    <TouchableOpacity style={card.wrap} activeOpacity={0.85} onPress={handleOpen}>
-      {/* Icon */}
-      <View style={[card.iconWrap, { backgroundColor: `${cfg.color}18`, borderColor: `${cfg.color}30` }]}>
-        <Text style={card.icon}>{cfg.icon}</Text>
+    <TouchableOpacity style={card.wrap} activeOpacity={0.82} onPress={handleOpen}>
+      {/* Left colour accent bar */}
+      <View style={[card.accent, { backgroundColor: cfg.color }]} />
+
+      {/* Abbreviation badge */}
+      <View style={[card.abbrWrap, { backgroundColor: `${cfg.color}16` }]}>
+        <Text style={[card.abbrText, { color: cfg.color }]}>{cfg.abbr}</Text>
       </View>
 
       {/* Content */}
       <View style={card.content}>
+        {/* Title row */}
         <View style={card.titleRow}>
-          <Text style={card.title} numberOfLines={1}>{doc.title}</Text>
-          <TouchableOpacity onPress={handleDelete} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Text style={card.deleteBtn}>✕</Text>
+          <Text style={card.title} numberOfLines={2}>{doc.title}</Text>
+          <TouchableOpacity
+            onPress={() => onDelete(doc)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={card.deleteBtn}
+          >
+            <Text style={card.deleteBtnText}>✕</Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={[card.typeLabel, { color: cfg.color }]}>{cfg.label}</Text>
+        {/* Type badge */}
+        <View style={[card.typeBadge, { borderColor: `${cfg.color}40` }]}>
+          <Text style={[card.typeText, { color: cfg.color }]}>{cfg.label.toUpperCase()}</Text>
+        </View>
 
-        {doc.vendor ? (
-          <Text style={card.meta} numberOfLines={1}>🏢 {doc.vendor}</Text>
-        ) : null}
-        {doc.personName ? (
-          <Text style={card.meta} numberOfLines={1}>👤 {doc.personName}</Text>
-        ) : null}
-        {doc.reference ? (
-          <Text style={card.meta} numberOfLines={1}>🔖 {doc.reference}</Text>
-        ) : null}
+        {/* Meta rows */}
+        <View style={card.metaBlock}>
+          {doc.vendor ? (
+            <View style={card.metaRow}>
+              <Text style={card.metaKey}>Issuer</Text>
+              <Text style={card.metaVal} numberOfLines={1}>{doc.vendor}</Text>
+            </View>
+          ) : null}
+          {doc.personName ? (
+            <View style={card.metaRow}>
+              <Text style={card.metaKey}>Name</Text>
+              <Text style={card.metaVal} numberOfLines={1}>{doc.personName}</Text>
+            </View>
+          ) : null}
+          {doc.reference ? (
+            <View style={card.metaRow}>
+              <Text style={card.metaKey}>Ref</Text>
+              <Text style={card.metaVal} numberOfLines={1}>{doc.reference}</Text>
+            </View>
+          ) : null}
+        </View>
 
-        {/* Amounts */}
+        {/* Amount pills */}
         {doc.amounts?.length > 0 && (
           <View style={card.amountRow}>
-            {doc.amounts.slice(0, 2).map((a, i) => (
+            {doc.amounts.slice(0, 3).map((a, i) => (
               <View key={i} style={card.amountBadge}>
-                <Text style={card.amountText}>💰 {a.currency} {a.value}</Text>
+                <Text style={card.amountText}>{a.currency} {a.value}</Text>
               </View>
             ))}
           </View>
         )}
 
-        {/* Expiry / date */}
+        {/* Footer: expiry + scanned date */}
         <View style={card.footer}>
           {expiry.label ? (
-            <View style={[card.expiryBadge, { backgroundColor: `${expiry.color}18`, borderColor: `${expiry.color}35` }]}>
-              <Text style={[card.expiryText, { color: expiry.color }]}>📅 {expiry.label}</Text>
+            <View style={[card.expiryBadge, { backgroundColor: `${expiry.color}14`, borderColor: `${expiry.color}35` }]}>
+              <Text style={[card.expiryText, { color: expiry.color }]}>{expiry.label}</Text>
             </View>
-          ) : null}
+          ) : <View />}
           <Text style={card.uploadedAt}>Scanned {uploadedDate}</Text>
         </View>
       </View>
@@ -280,34 +299,44 @@ function DocCard({
 
 const card = StyleSheet.create({
   wrap: {
-    flexDirection: 'row', gap: 14,
+    flexDirection: 'row',
     backgroundColor: C.surface,
-    borderRadius: 16, padding: 14,
-    marginBottom: 12,
+    borderRadius: 14,
+    marginBottom: 10,
     borderWidth: 1, borderColor: C.border,
+    overflow: 'hidden',
   },
-  iconWrap: {
-    width: 52, height: 52, borderRadius: 14,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1,
+  accent: { width: 4 },
+  abbrWrap: {
+    width: 56, alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 16,
   },
-  icon:      { fontSize: 26 },
-  content:   { flex: 1, gap: 4 },
-  titleRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  title:     { color: C.white, fontSize: 15, fontWeight: '700', flex: 1, marginRight: 8 },
-  deleteBtn: { color: C.textTer, fontSize: 14, fontWeight: '600' },
-  typeLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
-  meta:      { color: C.textSec, fontSize: 12, marginTop: 1 },
-  amountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  abbrText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  content:  { flex: 1, paddingVertical: 12, paddingRight: 12, paddingLeft: 4, gap: 6 },
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  title:    { color: C.white, fontSize: 14, fontWeight: '700', flex: 1, lineHeight: 20 },
+  deleteBtn:     { paddingLeft: 8, paddingTop: 2 },
+  deleteBtnText: { color: C.textTer, fontSize: 13 },
+  typeBadge: {
+    alignSelf: 'flex-start',
+    borderWidth: 1, borderRadius: 4,
+    paddingHorizontal: 6, paddingVertical: 2,
+  },
+  typeText: { fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  metaBlock: { gap: 2, marginTop: 2 },
+  metaRow:   { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metaKey:   { color: C.textTer, fontSize: 10, fontWeight: '600', width: 36, letterSpacing: 0.3 },
+  metaVal:   { color: C.textSec, fontSize: 12, flex: 1 },
+  amountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
   amountBadge: {
-    backgroundColor: `${C.verdigris}14`,
-    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3,
-    borderWidth: 1, borderColor: `${C.verdigris}28`,
+    backgroundColor: `${C.verdigris}12`,
+    borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: `${C.verdigris}25`,
   },
-  amountText:  { color: C.verdigris, fontSize: 12, fontWeight: '600' },
-  footer:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
-  expiryBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1 },
-  expiryText:  { fontSize: 11, fontWeight: '700' },
+  amountText: { color: C.verdigris, fontSize: 11, fontWeight: '700' },
+  footer:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
+  expiryBadge: { borderRadius: 5, paddingHorizontal: 7, paddingVertical: 2, borderWidth: 1 },
+  expiryText:  { fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
   uploadedAt:  { color: C.textTer, fontSize: 10 },
 });
 
@@ -489,7 +518,7 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
       <View style={s.container}>
         <StatusBar barStyle="light-content" backgroundColor={C.bg} />
         <SafeAreaView edges={['top']} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 }}>
-          <Text style={{ fontSize: 48, marginBottom: 16 }}>🔐</Text>
+          <View style={s.emptyIcon}><Text style={s.emptyIconText}>G</Text></View>
           <Text style={s.emptyTitle}>Connect Google to access your Wallet</Text>
           <Text style={s.emptySub}>
             Your documents are stored securely in your own Google Drive.
@@ -527,12 +556,12 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
               onPress={() => setUploadMenuVisible(true)}
               disabled={uploading}
             >
-              <Text style={s.uploadBtnText}>＋ Upload</Text>
+              <Text style={s.uploadBtnText}>+ Upload</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.driveBtn} onPress={() =>
               Linking.openURL('https://drive.google.com').catch(() => {})
             }>
-              <Text style={s.driveBtnText}>📁 Drive</Text>
+              <Text style={s.driveBtnText}>Drive</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -572,9 +601,9 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
           </View>
         ) : filteredDocs.length === 0 ? (
           <View style={s.center}>
-            <Text style={{ fontSize: 48, marginBottom: 16 }}>
-              {activeFilter === 'all' ? '📂' : '🔍'}
-            </Text>
+            <View style={s.emptyIcon}>
+              <Text style={s.emptyIconText}>{activeFilter === 'all' ? 'W' : '—'}</Text>
+            </View>
             <Text style={s.emptyTitle}>
               {activeFilter === 'all' ? 'No documents yet' : `No ${activeFilter} documents`}
             </Text>
@@ -752,6 +781,15 @@ const s = StyleSheet.create({
   connectBtnText: { color: C.white, fontSize: 15, fontWeight: '700' },
 
   loadingText: { color: C.textSec, fontSize: 14, marginTop: 12 },
+
+  emptyIcon: {
+    width: 64, height: 64, borderRadius: 18,
+    backgroundColor: C.surfaceEl,
+    borderWidth: 1, borderColor: C.border,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 20,
+  },
+  emptyIconText: { color: C.textTer, fontSize: 22, fontWeight: '800' },
 
   uploadBtn: {
     paddingHorizontal: 14, paddingVertical: 8,
