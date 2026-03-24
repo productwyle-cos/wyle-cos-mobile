@@ -6,7 +6,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  ActivityIndicator, Linking, RefreshControl,
+  ActivityIndicator, Linking, RefreshControl, ScrollView,
   Dimensions, StatusBar, Modal, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -27,7 +27,7 @@ const EXTRACTION_PROMPT = `You are analysing a document uploaded by the user. Ex
 
 Return a JSON object with these fields (use null for fields you cannot find):
 {
-  "document_type": one of: invoice | receipt | passport | emirates_id | national_id | insurance_policy | bank_statement | visa | driving_license | other,
+  "document_type": one of: invoice | receipt | passport | emirates_id | national_id | driving_license | visa | boarding_pass | hotel_booking | travel_insurance | insurance_policy | bank_statement | tax_document | payslip | medical_report | prescription | vaccination_record | health_insurance | contract | agreement | power_of_attorney | court_document | certificate | transcript | diploma | admission_letter | lease_agreement | utility_bill | property_deed | employment_letter | offer_letter | noc_letter | work_permit | vehicle_registration | vehicle_insurance | other,
   "title": short descriptive title (e.g. "TechMart Invoice #TM-2025-4821"),
   "vendor_or_issuer": company or authority name,
   "person_name": person the document belongs to (or null),
@@ -96,16 +96,52 @@ const C = {
 
 // ── Document type → icon + colour ────────────────────────────────────────────
 const DOC_CONFIG: Record<string, { icon: string; color: string; label: string }> = {
-  passport:         { icon: '🛂', color: '#4A90D9', label: 'Passport' },
-  emirates_id:      { icon: '🪪', color: '#7B61FF', label: 'Emirates ID' },
-  national_id:      { icon: '🪪', color: '#7B61FF', label: 'National ID' },
-  visa:             { icon: '✈️', color: '#1B998B', label: 'Visa' },
-  driving_license:  { icon: '🚗', color: '#FF9500', label: 'Driving License' },
-  insurance_policy: { icon: '🛡️', color: '#34C759', label: 'Insurance' },
-  invoice:          { icon: '📄', color: '#FF6B6B', label: 'Invoice' },
-  receipt:          { icon: '🧾', color: '#FF9500', label: 'Receipt' },
-  bank_statement:   { icon: '🏦', color: '#4A90D9', label: 'Bank Statement' },
-  other:            { icon: '📎', color: '#9A9A9A', label: 'Document' },
+  // Identity
+  passport:            { icon: '🛂', color: '#4A90D9', label: 'Passport' },
+  emirates_id:         { icon: '🪪', color: '#7B61FF', label: 'Emirates ID' },
+  national_id:         { icon: '🪪', color: '#7B61FF', label: 'National ID' },
+  driving_license:     { icon: '🚗', color: '#FF9500', label: 'Driving License' },
+  // Travel
+  visa:                { icon: '✈️', color: '#1B998B', label: 'Visa' },
+  boarding_pass:       { icon: '🎫', color: '#1B998B', label: 'Boarding Pass' },
+  hotel_booking:       { icon: '🏨', color: '#34C759', label: 'Hotel Booking' },
+  travel_insurance:    { icon: '🌍', color: '#34C759', label: 'Travel Insurance' },
+  // Finance
+  invoice:             { icon: '📄', color: '#FF6B6B', label: 'Invoice' },
+  receipt:             { icon: '🧾', color: '#FF9500', label: 'Receipt' },
+  bank_statement:      { icon: '🏦', color: '#4A90D9', label: 'Bank Statement' },
+  insurance_policy:    { icon: '🛡️', color: '#34C759', label: 'Insurance' },
+  tax_document:        { icon: '📊', color: '#FF6B6B', label: 'Tax Document' },
+  payslip:             { icon: '💰', color: '#34C759', label: 'Payslip' },
+  // Medical
+  medical_report:      { icon: '🏥', color: '#FF6B6B', label: 'Medical Report' },
+  prescription:        { icon: '💊', color: '#FF9500', label: 'Prescription' },
+  vaccination_record:  { icon: '💉', color: '#34C759', label: 'Vaccination' },
+  health_insurance:    { icon: '❤️‍🩹', color: '#FF6B6B', label: 'Health Insurance' },
+  // Legal
+  contract:            { icon: '📝', color: '#7B61FF', label: 'Contract' },
+  agreement:           { icon: '🤝', color: '#7B61FF', label: 'Agreement' },
+  power_of_attorney:   { icon: '⚖️', color: '#7B61FF', label: 'Power of Attorney' },
+  court_document:      { icon: '🏛️', color: '#9A9A9A', label: 'Court Document' },
+  // Education
+  certificate:         { icon: '🎓', color: '#FFD60A', label: 'Certificate' },
+  transcript:          { icon: '📚', color: '#FFD60A', label: 'Transcript' },
+  diploma:             { icon: '🏅', color: '#FFD60A', label: 'Diploma' },
+  admission_letter:    { icon: '🎒', color: '#FFD60A', label: 'Admission Letter' },
+  // Property
+  lease_agreement:     { icon: '🏠', color: '#FF9500', label: 'Lease Agreement' },
+  utility_bill:        { icon: '💡', color: '#FF9500', label: 'Utility Bill' },
+  property_deed:       { icon: '🏡', color: '#FF9500', label: 'Property Deed' },
+  // Work
+  employment_letter:   { icon: '💼', color: '#4A90D9', label: 'Employment Letter' },
+  offer_letter:        { icon: '📩', color: '#4A90D9', label: 'Offer Letter' },
+  noc_letter:          { icon: '📋', color: '#4A90D9', label: 'NOC Letter' },
+  work_permit:         { icon: '🔖', color: '#4A90D9', label: 'Work Permit' },
+  // Vehicle
+  vehicle_registration: { icon: '🚘', color: '#FF9500', label: 'Vehicle Reg.' },
+  vehicle_insurance:    { icon: '🚗', color: '#34C759', label: 'Vehicle Insurance' },
+  // Fallback
+  other:               { icon: '📎', color: '#9A9A9A', label: 'Document' },
 };
 
 function getDocConfig(type: string) {
@@ -141,17 +177,30 @@ function getExpiryInfo(dates: WyleDriveDoc['dates']): {
 
 // ── Filter tabs ───────────────────────────────────────────────────────────────
 const FILTERS = [
-  { key: 'all',      label: 'All' },
-  { key: 'id',       label: 'IDs' },
-  { key: 'finance',  label: 'Finance' },
-  { key: 'travel',   label: 'Travel' },
-  { key: 'other',    label: 'Other' },
+  { key: 'all',       label: 'All' },
+  { key: 'id',        label: '🪪 IDs' },
+  { key: 'finance',   label: '💰 Finance' },
+  { key: 'travel',    label: '✈️ Travel' },
+  { key: 'medical',   label: '🏥 Medical' },
+  { key: 'legal',     label: '⚖️ Legal' },
+  { key: 'education', label: '🎓 Education' },
+  { key: 'property',  label: '🏠 Property' },
+  { key: 'work',      label: '💼 Work' },
+  { key: 'vehicle',   label: '🚘 Vehicle' },
+  { key: 'other',     label: '📎 Other' },
 ];
 
 const FILTER_TYPES: Record<string, string[]> = {
-  id:      ['passport', 'emirates_id', 'national_id', 'driving_license'],
-  finance: ['invoice', 'receipt', 'bank_statement', 'insurance_policy'],
-  travel:  ['visa', 'passport'],
+  id:        ['passport', 'emirates_id', 'national_id', 'driving_license'],
+  finance:   ['invoice', 'receipt', 'bank_statement', 'insurance_policy', 'tax_document', 'payslip'],
+  travel:    ['visa', 'passport', 'boarding_pass', 'hotel_booking', 'travel_insurance'],
+  medical:   ['medical_report', 'prescription', 'vaccination_record', 'health_insurance'],
+  legal:     ['contract', 'agreement', 'power_of_attorney', 'court_document'],
+  education: ['certificate', 'transcript', 'diploma', 'admission_letter'],
+  property:  ['lease_agreement', 'utility_bill', 'property_deed'],
+  work:      ['employment_letter', 'offer_letter', 'noc_letter', 'work_permit', 'payslip'],
+  vehicle:   ['vehicle_registration', 'vehicle_insurance', 'driving_license'],
+  other:     ['other'],
 };
 
 // ── Doc Card ─────────────────────────────────────────────────────────────────
@@ -496,8 +545,12 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
           </View>
         )}
 
-        {/* Filter tabs */}
-        <View style={s.filterRow}>
+        {/* Filter tabs — horizontally scrollable */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={s.filterRow}
+        >
           {FILTERS.map(f => (
             <TouchableOpacity
               key={f.key}
@@ -509,7 +562,7 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
               </Text>
             </TouchableOpacity>
           ))}
-        </View>
+        </ScrollView>
 
         {/* Content */}
         {loading ? (

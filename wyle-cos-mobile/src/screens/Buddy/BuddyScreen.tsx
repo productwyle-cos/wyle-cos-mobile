@@ -576,7 +576,7 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
 
 Return a JSON object with these fields (use null for fields you cannot find):
 {
-  "document_type": one of: invoice | receipt | passport | emirates_id | national_id | insurance_policy | bank_statement | visa | driving_license | other,
+  "document_type": one of: invoice | receipt | passport | emirates_id | national_id | driving_license | visa | boarding_pass | hotel_booking | travel_insurance | insurance_policy | bank_statement | tax_document | payslip | medical_report | prescription | vaccination_record | health_insurance | contract | agreement | power_of_attorney | court_document | certificate | transcript | diploma | admission_letter | lease_agreement | utility_bill | property_deed | employment_letter | offer_letter | noc_letter | work_permit | vehicle_registration | vehicle_insurance | other,
   "title": short descriptive title (e.g. "TechMart Invoice #TM-2025-4821"),
   "vendor_or_issuer": company or authority name,
   "person_name": person the document belongs to (or null),
