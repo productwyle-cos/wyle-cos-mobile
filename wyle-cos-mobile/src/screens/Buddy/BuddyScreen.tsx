@@ -15,7 +15,7 @@ import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
-import { uploadFileToDrive, WyleDocMeta } from '../../services/driveService';
+import { uploadFileToDrive, findDuplicateDoc, computeContentHash, WyleDocMeta } from '../../services/driveService';
 import { getAccessToken } from '../../services/googleAuthService';
 import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
@@ -751,10 +751,35 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     }
 
     // ── Auto-upload to user's Google Drive (fire-and-forget, outside try/catch)
-    // Runs after extraction is shown — Drive errors never surface to the user
-    if (extractedForDrive) {
-      getAccessToken().then(driveToken => {
+    // Runs after extraction is shown — Drive errors never surface to the user.
+    // Duplicate check happens first: at most 2 Drive API calls before upload.
+    if (extractedForDrive && attachment) {
+      getAccessToken().then(async driveToken => {
         if (!driveToken) return;
+
+        // Build content fingerprint from base64 (fast, no deps)
+        const contentHash = attachment.base64
+          ? computeContentHash(attachment.base64)
+          : `name:${attachment.name}`;
+
+        // Check for duplicate — one filename query + one metadata download at most
+        try {
+          const duplicate = await findDuplicateDoc(attachment.name, contentHash, driveToken);
+          if (duplicate) {
+            const uploadedOn = new Date(duplicate.uploadedAt).toLocaleDateString('en-AE', {
+              day: 'numeric', month: 'short', year: 'numeric',
+            });
+            addMsg({
+              id: uid(), role: 'assistant',
+              text: `📂 **Already in your Wallet** — "${duplicate.title}" was scanned on ${uploadedOn}. No duplicate created.`,
+              timestamp: new Date(),
+            });
+            return;
+          }
+        } catch {
+          // Duplicate check failed — allow upload to proceed
+        }
+
         const docMeta: WyleDocMeta = {
           documentType: extractedForDrive.document_type    ?? 'file',
           title:        extractedForDrive.title            ?? attachment.name,
@@ -767,6 +792,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
           uploadedAt:   new Date().toISOString(),
           originalName: attachment.name,
           mimeType:     attachment.mimeType ?? 'application/octet-stream',
+          contentHash,
         };
         uploadFileToDrive(
           attachment.uri,

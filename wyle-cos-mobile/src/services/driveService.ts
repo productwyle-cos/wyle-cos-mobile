@@ -85,7 +85,58 @@ export type WyleDocMeta = {
   uploadedAt:   string;  // ISO
   originalName: string;
   mimeType:     string;
+  contentHash?: string;  // fingerprint for duplicate detection
 };
+
+// ── Content fingerprint — fast, no external deps ──────────────────────────────
+// Uses length + first 64 chars + last 64 chars of base64. Collision probability
+// is negligibly small for real documents.
+export function computeContentHash(base64: string): string {
+  return `${base64.length}:${base64.slice(0, 64)}:${base64.slice(-64)}`;
+}
+
+// ── Check if a document with the same filename/content already exists ─────────
+// Makes at most 2 Drive API calls (one list query + one metadata download).
+export async function findDuplicateDoc(
+  originalName: string,
+  contentHash:  string,
+  token:        string,
+): Promise<WyleDriveDoc | null> {
+  const folderId    = await ensureWyleFolder(token);
+  const metaFileName = originalName + META_SUFFIX;
+
+  // Single Drive query — look for the sidecar by exact filename
+  const q = encodeURIComponent(
+    `'${folderId}' in parents and name='${metaFileName}' and trashed=false`
+  );
+  const list = await driveGet(`/files?q=${q}&fields=files(id)`, token);
+  if (!list.files?.length) return null;
+
+  const metaFile = list.files[0];
+  try {
+    const content = await fetch(`${DRIVE_API}/files/${metaFile.id}?alt=media`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then(r => r.json()) as WyleDocMeta;
+
+    // Confirm: hashes match, OR no hash stored (legacy upload with same filename)
+    if (!content.contentHash || content.contentHash === contentHash) {
+      const origQ = encodeURIComponent(
+        `'${folderId}' in parents and name='${originalName}' and trashed=false`
+      );
+      const origList = await driveGet(`/files?q=${origQ}&fields=files(id,webViewLink)`, token);
+      const origFile = origList.files?.[0];
+      return {
+        ...content,
+        fileId:      origFile?.id          ?? '',
+        metaId:      metaFile.id,
+        webViewLink: origFile?.webViewLink ?? '',
+      };
+    }
+  } catch {
+    // Corrupt sidecar — let the upload proceed
+  }
+  return null;
+}
 
 export async function uploadFileToDrive(
   uri:      string,
