@@ -113,7 +113,7 @@ const TAB_ITEMS = [
   { key: 'home',        icon: '⊙',  label: 'Home'        },
   { key: 'obligations', icon: '✦',  label: 'Automations' },
   { key: 'buddy',       icon: 'orb', label: ''            },
-  { key: 'wallet',     icon: '🗂️', label: 'Wallet'      },
+  { key: 'insights',    icon: '▦',  label: 'Insights'    },
   { key: 'connect',     icon: '◈',  label: 'Profile'     },
 ];
 
@@ -393,6 +393,29 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
             </View>
           </Animated.View>
 
+          {/* ── Document Wallet ─────────────────────────────────────────────── */}
+          <Animated.View style={{ opacity: fadeIn }}>
+            <Text style={s.sectionLabel}>DOCUMENTS</Text>
+            <TouchableOpacity
+              style={s.walletCard}
+              activeOpacity={0.85}
+              onPress={() => nav.navigate('wallet' as any)}
+            >
+              <View style={s.walletIconWrap}>
+                <Text style={{ fontSize: 28 }}>🗂️</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.walletTitle}>Document Wallet</Text>
+                <Text style={s.walletSub}>
+                  {googleConnected
+                    ? 'View your scanned IDs, insurance, invoices & more'
+                    : 'Connect Google to access your documents'}
+                </Text>
+              </View>
+              <Text style={s.rowChevron}>›</Text>
+            </TouchableOpacity>
+          </Animated.View>
+
           {/* ── Account ────────────────────────────────────────────────────── */}
           <Animated.View style={{ opacity: fadeIn }}>
             <Text style={s.sectionLabel}>ACCOUNT</Text>
@@ -530,6 +553,22 @@ const s = StyleSheet.create({
     color: C.textTer, fontSize: 10, fontWeight: '700',
     letterSpacing: 2.5, marginBottom: 8, marginTop: 4,
   },
+
+  // ── Document Wallet card
+  walletCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: `${C.verdigris}12`,
+    borderRadius: 16, padding: 16, marginBottom: 20,
+    borderWidth: 1, borderColor: `${C.verdigris}30`,
+  },
+  walletIconWrap: {
+    width: 52, height: 52, borderRadius: 14,
+    backgroundColor: `${C.verdigris}18`,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: `${C.verdigris}28`,
+  },
+  walletTitle: { color: C.white, fontSize: 15, fontWeight: '700', marginBottom: 3 },
+  walletSub:   { color: C.textSec, fontSize: 12, lineHeight: 17 },
 
   // ── Membership card
   membershipCard: {

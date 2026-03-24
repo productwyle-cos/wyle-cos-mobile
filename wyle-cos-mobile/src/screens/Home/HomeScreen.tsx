@@ -289,7 +289,7 @@ const TAB_ITEMS = [
   { key: 'home',        icon: '⊙',  label: 'Home'        },
   { key: 'obligations', icon: '✦',  label: 'Automations' },
   { key: 'buddy',       icon: 'orb', label: ''            }, // centre orb
-  { key: 'wallet',     icon: '🗂️', label: 'Wallet'      },
+  { key: 'insights',    icon: '▦',  label: 'Insights'    },
   { key: 'connect',     icon: '◈',  label: 'Profile'     },
 ];
 
