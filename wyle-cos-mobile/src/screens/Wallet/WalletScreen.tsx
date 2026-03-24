@@ -115,14 +115,22 @@ function DocCard({
   };
 
   const handleDelete = () => {
-    Alert.alert(
-      'Remove Document',
-      `Remove "${doc.title}" from your Wallet? It will also be deleted from your Google Drive.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: () => onDelete(doc) },
-      ]
-    );
+    // Alert.alert doesn't work on web — use window.confirm as fallback
+    if (typeof window !== 'undefined' && (window as any).confirm) {
+      const ok = (window as any).confirm(
+        `Remove "${doc.title}" from your Wallet?\nIt will also be deleted from your Google Drive.`
+      );
+      if (ok) onDelete(doc);
+    } else {
+      Alert.alert(
+        'Remove Document',
+        `Remove "${doc.title}" from your Wallet? It will also be deleted from your Google Drive.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Remove', style: 'destructive', onPress: () => onDelete(doc) },
+        ]
+      );
+    }
   };
 
   return (
