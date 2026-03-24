@@ -6,8 +6,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  ActivityIndicator, Alert, Linking, RefreshControl,
-  Dimensions, StatusBar,
+  ActivityIndicator, Linking, RefreshControl,
+  Dimensions, StatusBar, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAccessToken, isGoogleConnected } from '../../services/googleAuthService';
@@ -98,7 +98,7 @@ function DocCard({
   onDelete,
 }: {
   doc: WyleDriveDoc;
-  onDelete: (doc: WyleDriveDoc) => void;
+  onDelete: (doc: WyleDriveDoc) => void;   // opens confirm modal in parent
 }) {
   const cfg    = getDocConfig(doc.documentType);
   const expiry = getExpiryInfo(doc.dates);
@@ -108,30 +108,11 @@ function DocCard({
 
   const handleOpen = () => {
     if (doc.webViewLink) {
-      Linking.openURL(doc.webViewLink).catch(() =>
-        Alert.alert('Error', 'Could not open document in Google Drive.')
-      );
+      Linking.openURL(doc.webViewLink).catch(() => {});
     }
   };
 
-  const handleDelete = () => {
-    // Alert.alert doesn't work on web — use window.confirm as fallback
-    if (typeof window !== 'undefined' && (window as any).confirm) {
-      const ok = (window as any).confirm(
-        `Remove "${doc.title}" from your Wallet?\nIt will also be deleted from your Google Drive.`
-      );
-      if (ok) onDelete(doc);
-    } else {
-      Alert.alert(
-        'Remove Document',
-        `Remove "${doc.title}" from your Wallet? It will also be deleted from your Google Drive.`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Remove', style: 'destructive', onPress: () => onDelete(doc) },
-        ]
-      );
-    }
-  };
+  const handleDelete = () => onDelete(doc);
 
   return (
     <TouchableOpacity style={card.wrap} activeOpacity={0.85} onPress={handleOpen}>
@@ -228,6 +209,8 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
   const [refreshing, setRefreshing] = useState(false);
   const [activeFilter, setActiveFilter] = useState('all');
   const [connected, setConnected] = useState(false);
+  const [confirmDoc, setConfirmDoc] = useState<WyleDriveDoc | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const loadDocs = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true); else setLoading(true);
@@ -253,13 +236,14 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
   useEffect(() => { loadDocs(); }, [loadDocs]);
 
   const handleDelete = async (doc: WyleDriveDoc) => {
+    setConfirmDoc(null);
     try {
       const token = await getAccessToken();
       if (!token) throw new Error('Not signed in');
       await deleteWyleDoc(doc.fileId, doc.metaId, token);
       setDocs(prev => prev.filter(d => d.metaId !== doc.metaId));
     } catch (e: any) {
-      Alert.alert('Error', `Could not delete document: ${e.message}`);
+      setDeleteError(`Could not delete document: ${e.message}`);
     }
   };
 
@@ -353,7 +337,7 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
             data={filteredDocs}
             keyExtractor={d => d.metaId}
             renderItem={({ item }) => (
-              <DocCard doc={item} onDelete={handleDelete} />
+              <DocCard doc={item} onDelete={setConfirmDoc} />
             )}
             contentContainerStyle={s.list}
             showsVerticalScrollIndicator={false}
@@ -367,6 +351,55 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
           />
         )}
       </SafeAreaView>
+
+      {/* ── Delete confirmation modal ────────────────────────────── */}
+      <Modal
+        visible={confirmDoc !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmDoc(null)}
+      >
+        <View style={modal.overlay}>
+          <View style={modal.box}>
+            <Text style={modal.title}>Remove Document</Text>
+            <Text style={modal.message}>
+              Remove <Text style={modal.docName}>"{confirmDoc?.title}"</Text> from your Wallet?{'\n'}
+              It will also be deleted from your Google Drive.
+            </Text>
+            <View style={modal.btnRow}>
+              <TouchableOpacity style={modal.cancelBtn} onPress={() => setConfirmDoc(null)}>
+                <Text style={modal.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={modal.removeBtn}
+                onPress={() => confirmDoc && handleDelete(confirmDoc)}
+              >
+                <Text style={modal.removeText}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Delete error modal ───────────────────────────────────── */}
+      <Modal
+        visible={deleteError !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteError(null)}
+      >
+        <View style={modal.overlay}>
+          <View style={modal.box}>
+            <Text style={modal.title}>Error</Text>
+            <Text style={modal.message}>{deleteError}</Text>
+            <View style={modal.btnRow}>
+              <TouchableOpacity style={modal.removeBtn} onPress={() => setDeleteError(null)}>
+                <Text style={modal.removeText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -420,4 +453,38 @@ const s = StyleSheet.create({
   connectBtnText: { color: C.white, fontSize: 15, fontWeight: '700' },
 
   loadingText: { color: C.textSec, fontSize: 14, marginTop: 12 },
+});
+
+const modal = StyleSheet.create({
+  overlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  box: {
+    width: '100%', backgroundColor: C.surface,
+    borderRadius: 20, padding: 24,
+    borderWidth: 1, borderColor: C.border,
+  },
+  title: {
+    color: C.white, fontSize: 18, fontWeight: '800',
+    marginBottom: 10,
+  },
+  message: {
+    color: C.textSec, fontSize: 14, lineHeight: 22,
+    marginBottom: 24,
+  },
+  docName: { color: C.white, fontWeight: '700' },
+  btnRow: { flexDirection: 'row', gap: 12, justifyContent: 'flex-end' },
+  cancelBtn: {
+    paddingHorizontal: 20, paddingVertical: 11,
+    borderRadius: 12, backgroundColor: C.surfaceEl,
+    borderWidth: 1, borderColor: C.border,
+  },
+  cancelText: { color: C.textSec, fontSize: 14, fontWeight: '700' },
+  removeBtn: {
+    paddingHorizontal: 20, paddingVertical: 11,
+    borderRadius: 12, backgroundColor: C.crimson,
+  },
+  removeText: { color: C.white, fontSize: 14, fontWeight: '700' },
 });
