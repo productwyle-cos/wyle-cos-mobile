@@ -15,16 +15,18 @@ import PreferencesScreen from '../screens/Onboarding/PreferencesScreen';
 import ObligationScanScreen from '../screens/Onboarding/ObligationScanScreen';
 import ReadyScreen from '../screens/Onboarding/ReadyScreen';
 import BrainDumpScreen from '../screens/BrainDump/BrainDumpScreen';
+import WalletScreen from '../screens/Wallet/WalletScreen';
 
 const RootStack = createStackNavigator();
 const OnboardingStack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
 const TAB_ICONS: Record<string, string> = {
-  Home: '⌂',
+  Home:        '⌂',
   Obligations: '📋',
-  Buddy: '◎',
-  Insights: '◈',
+  Buddy:       '◎',
+  Wallet:      '🗂️',
+  Insights:    '◈',
 };
 
 // ─── Onboarding flow ──────────────────────────────────────────────────────────
@@ -64,6 +66,7 @@ function MainTabs() {
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Obligations" component={ObligationsScreen} />
       <Tab.Screen name="Buddy" component={BuddyScreen} />
+      <Tab.Screen name="Wallet" component={WalletScreen} />
       <Tab.Screen name="Insights" component={InsightsScreen} />
     </Tab.Navigator>
   );

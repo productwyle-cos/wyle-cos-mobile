@@ -15,6 +15,8 @@ import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import { uploadFileToDrive, findDuplicateDoc, computeContentHash, WyleDocMeta } from '../../services/driveService';
+import { getAccessToken } from '../../services/googleAuthService';
 import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
@@ -111,6 +113,11 @@ type Message = {
   attachment?: Attachment;
 };
 type VoiceState = 'idle' | 'recording' | 'transcribing';
+
+// Guaranteed unique message ID — avoids duplicate-key warning when two
+// messages are created within the same millisecond
+let _msgCounter = 0;
+const uid = () => `${Date.now()}_${++_msgCounter}`;
 
 const QUICK_PROMPTS = [
   { label: '📋 Urgent items',  text: 'What are my most urgent tasks right now?' },
@@ -569,7 +576,7 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
 
 Return a JSON object with these fields (use null for fields you cannot find):
 {
-  "document_type": one of: invoice | receipt | passport | emirates_id | national_id | insurance_policy | bank_statement | visa | driving_license | other,
+  "document_type": one of: invoice | receipt | passport | emirates_id | national_id | driving_license | visa | boarding_pass | hotel_booking | travel_insurance | insurance_policy | bank_statement | tax_document | payslip | medical_report | prescription | vaccination_record | health_insurance | contract | agreement | power_of_attorney | court_document | certificate | transcript | diploma | admission_letter | lease_agreement | utility_bill | property_deed | employment_letter | offer_letter | noc_letter | work_permit | vehicle_registration | vehicle_insurance | other,
   "title": short descriptive title (e.g. "TechMart Invoice #TM-2025-4821"),
   "vendor_or_issuer": company or authority name,
   "person_name": person the document belongs to (or null),
@@ -632,12 +639,13 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
   const sendWithAttachment = async () => {
     if (!pendingAttachment && !input.trim()) return;
 
-    const caption   = input.trim();
+    const caption    = input.trim();
     const attachment = pendingAttachment;
+    let extractedForDrive: any = null;   // captured outside try so Drive upload runs after finally
 
     // Post user message immediately
     const userMsg: Message = {
-      id: Date.now().toString(),
+      id: uid(),
       role: 'user',
       text: caption,
       timestamp: new Date(),
@@ -693,6 +701,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         // Strip any accidental markdown fences
         const clean = rawText.replace(/```json|```/g, '').trim();
         extracted = JSON.parse(clean);
+        extractedForDrive = extracted;   // capture for Drive upload after finally
       } catch { /* not JSON — show raw */ }
 
       let buddyText: string;
@@ -723,7 +732,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       }
 
       setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
+        id: uid(),
         role: 'buddy',
         text: buddyText,
         timestamp: new Date(),
@@ -731,7 +740,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
 
     } catch (e: any) {
       setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
+        id: uid(),
         role: 'buddy',
         text: `Sorry, I couldn't analyse that file. ${e.message ?? 'Please try again.'}`,
         timestamp: new Date(),
@@ -740,6 +749,66 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       setLoading(false);
       scrollToEnd();
     }
+
+    // ── Auto-upload to user's Google Drive (fire-and-forget, outside try/catch)
+    // Runs after extraction is shown — Drive errors never surface to the user.
+    // Duplicate check happens first: at most 2 Drive API calls before upload.
+    if (extractedForDrive && attachment) {
+      getAccessToken().then(async driveToken => {
+        if (!driveToken) return;
+
+        // Build content fingerprint from base64 (fast, no deps)
+        const contentHash = attachment.base64
+          ? computeContentHash(attachment.base64)
+          : `name:${attachment.name}`;
+
+        // Check for duplicate — one filename query + one metadata download at most
+        try {
+          const duplicate = await findDuplicateDoc(attachment.name, contentHash, driveToken);
+          if (duplicate) {
+            const uploadedOn = new Date(duplicate.uploadedAt).toLocaleDateString('en-AE', {
+              day: 'numeric', month: 'short', year: 'numeric',
+            });
+            addMsg({
+              id: uid(), role: 'assistant',
+              text: `📂 **Already in your Wallet** — "${duplicate.title}" was scanned on ${uploadedOn}. No duplicate created.`,
+              timestamp: new Date(),
+            });
+            return;
+          }
+        } catch {
+          // Duplicate check failed — allow upload to proceed
+        }
+
+        const docMeta: WyleDocMeta = {
+          documentType: extractedForDrive.document_type    ?? 'file',
+          title:        extractedForDrive.title            ?? attachment.name,
+          vendor:       extractedForDrive.vendor_or_issuer ?? '',
+          personName:   extractedForDrive.person_name      ?? '',
+          amounts:      extractedForDrive.amounts          ?? [],
+          dates:        extractedForDrive.dates            ?? [],
+          reference:    extractedForDrive.reference_number ?? '',
+          summary:      extractedForDrive.summary          ?? '',
+          uploadedAt:   new Date().toISOString(),
+          originalName: attachment.name,
+          mimeType:     attachment.mimeType ?? 'application/octet-stream',
+          contentHash,
+        };
+        uploadFileToDrive(
+          attachment.uri,
+          attachment.name,
+          attachment.mimeType ?? 'application/octet-stream',
+          docMeta,
+          driveToken,
+        ).then(() => {
+          console.log('[Drive] ✅ Uploaded:', attachment.name);
+        }).catch(err => {
+          console.warn('[Drive] Upload failed (non-blocking):', err.message);
+        });
+      }).catch(err => {
+        console.warn('[Drive] getAccessToken failed (non-blocking):', err.message);
+      });
+    }
   };
 
   // ── Confirm / cancel a pending resolve ─────────────────────────────────────
@@ -747,7 +816,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     if (!pendingResolve) return;
     resolveObligation(pendingResolve.id);
     const msg = `✅ Done! "${pendingResolve.title}" is marked as completed and removed from your active list.`;
-    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'buddy', text: msg, timestamp: new Date() }]);
+    setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: msg, timestamp: new Date() }]);
     speakText(`Done! ${pendingResolve.title} has been marked as completed.`);
     setPendingResolve(null);
     scrollToEnd();
@@ -756,7 +825,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
   const handleCancelResolve = () => {
     if (!pendingResolve) return;
     const msg = `No problem! "${pendingResolve.title}" stays in your active list.`;
-    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'buddy', text: msg, timestamp: new Date() }]);
+    setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: msg, timestamp: new Date() }]);
     setPendingResolve(null);
     scrollToEnd();
   };
@@ -773,7 +842,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     // Intercept replies to a pending scan obligation ("yes add it / no skip")
     if (pendingObligationFromScan) {
       if (isYes) {
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'user', text, timestamp: new Date() }]);
         // Deduplicate: only add if not already in the list
         const alreadyExists = obligations.some(
           o => o.title.toLowerCase() === pendingObligationFromScan.title.toLowerCase()
@@ -781,13 +850,13 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         if (!alreadyExists) {
           addObligation(pendingObligationFromScan);
           setMessages(prev => [...prev, {
-            id: (Date.now() + 1).toString(), role: 'buddy',
+            id: uid(), role: 'buddy',
             text: `✅ Added "${pendingObligationFromScan.title}" to your Automations list.`,
             timestamp: new Date(),
           }]);
         } else {
           setMessages(prev => [...prev, {
-            id: (Date.now() + 1).toString(), role: 'buddy',
+            id: uid(), role: 'buddy',
             text: `"${pendingObligationFromScan.title}" is already in your Automations list — no duplicate added.`,
             timestamp: new Date(),
           }]);
@@ -797,10 +866,10 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         return;
       }
       if (isNo) {
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'user', text, timestamp: new Date() }]);
         setPendingObligationFromScan(null);
         setMessages(prev => [...prev, {
-          id: (Date.now() + 1).toString(), role: 'buddy',
+          id: uid(), role: 'buddy',
           text: 'No problem — skipped. Let me know if you need anything else.',
           timestamp: new Date(),
         }]);
@@ -811,11 +880,11 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
 
     if (pendingResolve) {
       if (isYes) {
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'user', text, timestamp: new Date() }]);
         handleConfirmResolve(); return;
       }
       if (isNo) {
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text, timestamp: new Date() }]);
+        setMessages(prev => [...prev, { id: uid(), role: 'user', text, timestamp: new Date() }]);
         handleCancelResolve(); return;
       }
     }
@@ -823,7 +892,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     setShowQuick(false);
     setInput('');
 
-    const userMsg: Message = { id: Date.now().toString(), role: 'user', text: text.trim(), timestamp: new Date() };
+    const userMsg: Message = { id: uid(), role: 'user', text: text.trim(), timestamp: new Date() };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     scrollToEnd();
@@ -863,19 +932,19 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
           const { obligation_id, obligation_title } = toolUse.input;
           setPendingResolve({ id: obligation_id, title: obligation_title });
           const askText = `Should I mark "${obligation_title}" as completed and remove it from your active list?`;
-          setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'buddy', text: askText, timestamp: new Date() }]);
+          setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: askText, timestamp: new Date() }]);
           if (speakResponse) speakText(`Should I mark ${obligation_title} as completed and remove it from your list?`);
           return;
         }
       }
 
       const responseText = data.content?.[0]?.text ?? "Something went wrong. Try again?";
-      const buddyMsg: Message = { id: (Date.now() + 1).toString(), role: 'buddy', text: responseText, timestamp: new Date() };
+      const buddyMsg: Message = { id: uid(), role: 'buddy', text: responseText, timestamp: new Date() };
       setMessages(prev => [...prev, buddyMsg]);
       if (speakResponse) speakText(responseText);
     } catch {
       const fallback = "I'm having a connection issue. Your most urgent item is your UAE visa — it expires in 8 days. Want me to walk you through the GDRFA renewal process?";
-      setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), role: 'buddy', text: fallback, timestamp: new Date() }]);
+      setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: fallback, timestamp: new Date() }]);
       if (speakResponse) speakText(fallback);
     } finally {
       setLoading(false);
@@ -1073,13 +1142,13 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
                 if (!alreadyExists) {
                   addObligation(ob);
                   setMessages(prev => [...prev, {
-                    id: Date.now().toString(), role: 'buddy',
+                    id: uid(), role: 'buddy',
                     text: `✅ Added "${ob.title}" to your Automations list with a reminder.`,
                     timestamp: new Date(),
                   }]);
                 } else {
                   setMessages(prev => [...prev, {
-                    id: Date.now().toString(), role: 'buddy',
+                    id: uid(), role: 'buddy',
                     text: `"${ob.title}" is already in your Automations list — no duplicate added.`,
                     timestamp: new Date(),
                   }]);

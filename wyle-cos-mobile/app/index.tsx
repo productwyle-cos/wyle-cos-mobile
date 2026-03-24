@@ -15,6 +15,7 @@ import InsightsScreen      from '../src/screens/Insights/InsightsScreen';
 import MorningBriefScreen  from '../src/screens/Brief/MorningBriefScreen';
 import ConnectScreen       from '../src/screens/Connect/ConnectScreen';
 import CalendarScreen      from '../src/screens/Calendar/CalendarScreen';
+import WalletScreen        from '../src/screens/Wallet/WalletScreen';
 
 export type ScreenName =
   | 'splash'
@@ -24,6 +25,7 @@ export type ScreenName =
   | 'obligations'
   | 'buddy'
   | 'insights'
+  | 'wallet'
   | 'morningBrief'
   | 'connect'
   | 'calendar';
@@ -68,6 +70,7 @@ export default function AppEntry() {
     case 'obligations':  return <ObligationsScreen    navigation={navigation} />;
     case 'buddy':        return <BuddyScreen          navigation={navigation} />;
     case 'insights':     return <InsightsScreen       navigation={navigation} />;
+    case 'wallet':       return <WalletScreen          navigation={navigation} />;
     case 'morningBrief': return <MorningBriefScreen   navigation={navigation} />;
     case 'connect':      return <ConnectScreen        navigation={navigation} />;
     case 'calendar':     return <CalendarScreen       navigation={navigation} />;
