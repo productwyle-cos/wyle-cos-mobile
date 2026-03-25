@@ -648,6 +648,7 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          style={s.filterScroll}
           contentContainerStyle={s.filterRow}
         >
           {FILTERS.map(f => (
@@ -865,14 +866,18 @@ const s = StyleSheet.create({
   },
   driveBtnText: { color: C.textSec, fontSize: 13, fontWeight: '600' },
 
-  filterRow: {
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 12,
+  filterScroll: {
+    flexGrow: 0,          // ← prevents vertical stretch
     borderBottomWidth: 1,
     borderBottomColor: C.border,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center', // ← keeps pills vertically centred
+    gap: 6,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 10,
   },
   filterTab: {
     paddingHorizontal: 13,
