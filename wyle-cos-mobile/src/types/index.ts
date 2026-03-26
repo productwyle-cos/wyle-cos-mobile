@@ -148,6 +148,10 @@ export interface MorningBrief {
   headline: string;
   lifeOptimizationScore: number;
   topPriorities: BriefPriority[];
+  /** Evening only — items completed during the day */
+  completedItems?: BriefCompletedItem[];
+  /** Evening only — one-sentence preview of tomorrow */
+  tomorrowPreview?: string;
   stats: {
     obligationsTracked: number;
     timeSavedThisWeek: string;
@@ -165,6 +169,14 @@ export interface BriefPriority {
   daysUntil: number | null;
   executionPath?: string;
   action: string;
+}
+
+export interface BriefCompletedItem {
+  id: string;
+  title: string;
+  emoji: string;
+  /** Optional short note e.g. "Saved AED 450" or "Filed on time" */
+  completedNote?: string;
 }
 
 // ─── Insights ─────────────────────────────────────────────────────────────────

@@ -51,13 +51,13 @@ Generate a ${isEvening ? 'calm evening recap' : 'sharp morning brief'} for the u
 
 User context:
 - Life Optimization Score: ${losScore}/100
-- Active obligations (${activeObs.length}):
+- Active / pending obligations (${activeObs.length}):
 ${obsLines}${completedLine}
 
 Return ONLY a valid JSON object — no markdown, no explanation — matching this exact shape:
 {
   "greeting": "string — ${isEvening ? 'warm, 5-6 word evening greeting' : 'energising, 5-6 word morning greeting'}",
-  "headline": "string — one punchy sentence: ${isEvening ? 'what still needs attention tomorrow' : 'the single most important thing today'}",
+  "headline": "string — one punchy sentence: ${isEvening ? 'how the day went or what still needs attention' : 'the single most important thing today'}",
   "lifeOptimizationScore": ${losScore},
   "topPriorities": [
     {
@@ -70,19 +70,30 @@ Return ONLY a valid JSON object — no markdown, no explanation — matching thi
       "executionPath": "one-line how-to",
       "action": "short imperative e.g. Renew now"
     }
+  ],${isEvening ? `
+  "completedItems": [
+    {
+      "id": "c1",
+      "title": "completed obligation title",
+      "emoji": "relevant emoji",
+      "completedNote": "optional short win note e.g. Saved AED 450 or Filed on time"
+    }
   ],
+  "tomorrowPreview": "one calm sentence previewing the top priority for tomorrow",` : ''}
   "stats": {
     "obligationsTracked": ${activeObs.length},
     "timeSavedThisWeek": "4h 20m",
     "decisionsHandled": 12
   },
-  "tip": "one specific, practical tip for today related to their obligations"
+  "tip": "one specific, practical tip for ${isEvening ? 'tonight or tomorrow morning' : 'today'} related to their obligations"
 }
 
 Rules:
-- topPriorities: maximum 3 items, highest riskLevel first. Only include items from the obligations list above.
+- topPriorities: maximum 3 items from the ACTIVE list, highest riskLevel first. Empty array [] if nothing is pending.
 - Keep all strings short — this renders on a mobile card.
-- Tone: ${isEvening ? 'calm, reflective, wind-down' : 'focused, action-oriented, decisive'}.`;
+- Tone: ${isEvening ? 'calm, reflective, wind-down' : 'focused, action-oriented, decisive'}.${isEvening ? `
+- completedItems: include ALL items from "Recently completed" list above. Empty array [] if none were completed.
+- tomorrowPreview: one calm sentence about the top upcoming obligation. "You're all clear for tomorrow." if nothing pending.` : ''}`;
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
