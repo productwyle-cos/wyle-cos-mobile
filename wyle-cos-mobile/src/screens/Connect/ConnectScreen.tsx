@@ -270,11 +270,22 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
   const handleConnect = async () => {
     setConnecting(true);
     const result = await signInWithGoogle();
-    if (result.success) {
+
+    if (result.success === 'redirect') {
+      // Web: page is navigating to Google sign-in.
+      // Keep the spinner; app/index.tsx will handle the callback on return
+      // and isGoogleConnected() will reflect the new token when this screen remounts.
+      return; // do NOT call setConnecting(false) — page is redirecting away
+    }
+
+    if (result.success === true) {
       setGoogleConnected(true);
       setGoogleEmail(result.email);
       try {
-        const scan = await runFullSignalScan(result.accessToken, obligations.filter(o => o.status === 'active'));
+        const scan = await runFullSignalScan(
+          result.accessToken,
+          obligations.filter(o => o.status === 'active'),
+        );
         if (scan.obligations.length > 0) addObligations(scan.obligations);
       } catch {}
     }
