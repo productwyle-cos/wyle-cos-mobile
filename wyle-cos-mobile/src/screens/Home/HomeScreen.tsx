@@ -594,22 +594,87 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
             </Text>
           </Animated.View>
         ) : (
-          /* Connected state — tap to open calendar view */
-          <Animated.View style={{ opacity: fadeIn }}>
+          /* ── Google connected banner ── */
+          <Animated.View style={[s.gBanner, { opacity: fadeIn }]}>
             <TouchableOpacity
-              style={s.googleConnectedCard}
+              style={s.gBannerInner}
               onPress={() => nav.navigate('calendar')}
-              activeOpacity={0.85}
+              activeOpacity={0.82}
             >
-              <View style={s.googleConnectedIcon}>
-                <Text style={{ fontSize: 16 }}>📅</Text>
+              {/* Left: Google G logo inside a white circle */}
+              <View style={s.gLogoCircle}>
+                <SvgXml xml={GOOGLE_G_SVG} width={20} height={20} />
               </View>
+
+              {/* Centre: text block */}
               <View style={{ flex: 1 }}>
-                <Text style={s.googleConnectedTitle}>Calendar & Gmail connected</Text>
-                <Text style={s.googleConnectedSub}>Tap to view upcoming meetings · {googleEmail}</Text>
+                {/* "Connected with Google" pill row */}
+                <View style={s.gBannerTitleRow}>
+                  <View style={s.gConnectedPill}>
+                    <View style={s.gConnectedDot} />
+                    <Text style={s.gConnectedPillText}>Connected</Text>
+                  </View>
+                  <Text style={s.gBannerProductText}>Google Workspace</Text>
+                </View>
+
+                {/* Services row */}
+                <View style={s.gServicesRow}>
+                  {/* Gmail chip */}
+                  <View style={s.gServiceChip}>
+                    {/* Gmail "M" mark — red/blue/yellow stripes approximated */}
+                    <View style={s.gMailIcon}>
+                      <View style={[s.gMailStripe, { backgroundColor: '#EA4335' }]} />
+                      <View style={[s.gMailStripe, { backgroundColor: '#FBBC05' }]} />
+                      <View style={[s.gMailStripe, { backgroundColor: '#34A853' }]} />
+                      <View style={[s.gMailStripe, { backgroundColor: '#4285F4' }]} />
+                    </View>
+                    <Text style={s.gServiceLabel}>Gmail</Text>
+                  </View>
+
+                  <View style={s.gServiceDivider} />
+
+                  {/* Calendar chip */}
+                  <View style={s.gServiceChip}>
+                    <View style={s.gCalIcon}>
+                      <View style={s.gCalHeader} />
+                      <View style={s.gCalGrid}>
+                        {[...Array(4)].map((_, i) => (
+                          <View key={i} style={s.gCalDot} />
+                        ))}
+                      </View>
+                    </View>
+                    <Text style={s.gServiceLabel}>Calendar</Text>
+                  </View>
+
+                  <View style={s.gServiceDivider} />
+
+                  {/* Drive chip */}
+                  <View style={s.gServiceChip}>
+                    <View style={s.gDriveIcon}>
+                      <View style={[s.gDriveTriStripe, { backgroundColor: '#4285F4', transform: [{ rotate: '0deg' }] }]} />
+                      <View style={[s.gDriveTriStripe, { backgroundColor: '#34A853', transform: [{ rotate: '120deg' }] }]} />
+                      <View style={[s.gDriveTriStripe, { backgroundColor: '#FBBC05', transform: [{ rotate: '240deg' }] }]} />
+                    </View>
+                    <Text style={s.gServiceLabel}>Drive</Text>
+                  </View>
+                </View>
+
+                {/* Email sub-line */}
+                <Text style={s.gBannerEmail} numberOfLines={1}>{googleEmail}</Text>
               </View>
-              <Text style={s.connectedArrow}>›</Text>
+
+              {/* Right: chevron */}
+              <View style={s.gBannerChevron}>
+                <Text style={s.gBannerChevronText}>›</Text>
+              </View>
             </TouchableOpacity>
+
+            {/* Bottom accent stripe — Google colours */}
+            <View style={s.gBannerStripe}>
+              {(['#4285F4','#EA4335','#FBBC05','#34A853'] as const).map((col, i) => (
+                <View key={i} style={[s.gStripeSegment, { backgroundColor: col }]} />
+              ))}
+            </View>
           </Animated.View>
         )}
 
@@ -842,22 +907,107 @@ const s = StyleSheet.create({
   googleCardSub: {
     color: C.textTer, fontSize: 10, marginTop: 8, textAlign: 'center',
   },
-  // Connected state
-  googleConnectedCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: `${C.verdigris}0D`,
-    borderRadius: 14, padding: 14,
+  // ── Google connected banner ───────────────────────────────────────────────
+  gBanner: {
     marginHorizontal: 16, marginBottom: 14,
-    borderWidth: 1, borderColor: `${C.verdigris}35`,
+    borderRadius: 16, overflow: 'hidden',
+    backgroundColor: '#0F1923',          // very dark blue-tinted surface
+    borderWidth: 1, borderColor: '#1E2D3D',
+    elevation: 4,
+    shadowColor: '#4285F4',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
   },
-  googleConnectedIcon: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: `${C.verdigris}22`,
+  gBannerInner: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 14, gap: 12,
+  },
+
+  // Google G circle
+  gLogoCircle: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+    elevation: 2,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15, shadowRadius: 3,
+  },
+
+  // Title row
+  gBannerTitleRow: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: 8, marginBottom: 8,
+  },
+  gConnectedPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#1A3A2A',
+    borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: '#34A85340',
+  },
+  gConnectedDot: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: '#34A853',
+  },
+  gConnectedPillText: { color: '#34A853', fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
+  gBannerProductText: { color: '#5F6368', fontSize: 10, fontWeight: '600', letterSpacing: 0.2 },
+
+  // Services row — Gmail · Calendar · Drive chips
+  gServicesRow: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: 6, marginBottom: 7,
+  },
+  gServiceChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#1A1F2E',
+    borderRadius: 6, paddingHorizontal: 7, paddingVertical: 4,
+    borderWidth: 1, borderColor: '#2A3040',
+  },
+  gServiceLabel: { color: '#9AA0A6', fontSize: 10, fontWeight: '600' },
+  gServiceDivider: { width: 1, height: 14, backgroundColor: '#2A3040' },
+
+  // Gmail stripe icon
+  gMailIcon: {
+    flexDirection: 'row', width: 12, height: 10,
+    borderRadius: 2, overflow: 'hidden',
+  },
+  gMailStripe: { flex: 1 },
+
+  // Calendar mini icon
+  gCalIcon: {
+    width: 12, height: 12, borderRadius: 2,
+    backgroundColor: '#FFFFFF', overflow: 'hidden',
+  },
+  gCalHeader: { height: 4, backgroundColor: '#4285F4' },
+  gCalGrid:   { flex: 1, flexDirection: 'row', flexWrap: 'wrap', padding: 1, gap: 1 },
+  gCalDot:    { width: 3, height: 3, backgroundColor: '#EA4335', borderRadius: 0.5 },
+
+  // Drive triangle icon (simplified as 3 overlapping stripes)
+  gDriveIcon: {
+    width: 13, height: 12,
     alignItems: 'center', justifyContent: 'center',
   },
-  googleConnectedTitle: { color: C.verdigris, fontSize: 13, fontWeight: '700', marginBottom: 2 },
-  googleConnectedSub:   { color: C.textSec, fontSize: 11 },
-  connectedArrow: { color: C.chartreuse, fontSize: 20, fontWeight: '300' },
+  gDriveTriStripe: {
+    position: 'absolute', width: 8, height: 3, borderRadius: 1,
+  },
+
+  // Email line
+  gBannerEmail: { color: '#5F6368', fontSize: 10, letterSpacing: 0.1 },
+
+  // Chevron
+  gBannerChevron: {
+    width: 26, height: 26, borderRadius: 8,
+    backgroundColor: '#1A1F2E',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#2A3040',
+  },
+  gBannerChevronText: { color: '#5F6368', fontSize: 16, fontWeight: '300', lineHeight: 22 },
+
+  // Bottom 4-colour Google stripe
+  gBannerStripe: {
+    flexDirection: 'row', height: 3,
+  },
+  gStripeSegment: { flex: 1 },
 
   // ── Tab bar
   tabBar: {
