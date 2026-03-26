@@ -678,46 +678,115 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
           </Animated.View>
         )}
 
-        {/* ── Priority Tasks ─────────────────────────────────────────────────── */}
-        <Animated.View style={[s.section, { opacity: fadeIn }]}>
-          <View style={s.sectionRow}>
-            <Text style={s.sectionTitle}>PRIORITY TASKS</Text>
-            <View style={s.activeBadge}>
-              <Text style={s.activeBadgeText}>{activeCount} Active</Text>
-            </View>
-          </View>
+        {/* ── Priority Tasks + Ready to Execute ─────────────────────────────── */}
+        {activeCount === 0 ? (
+          /* ── Empty state: no tasks yet ──────────────────────────────────── */
+          <Animated.View style={[s.section, { opacity: fadeIn }]}>
+            <View style={s.stackClearCard}>
 
-          {featuredTask && (
-            <FeaturedTaskCard item={featuredTask} onPress={() => nav.navigate('obligations')} />
-          )}
+              {/* Top row: icon + headline */}
+              <View style={s.stackClearTop}>
+                <View style={s.stackClearIconWrap}>
+                  {/* Stacked "layers" icon made from 3 horizontal bars */}
+                  <View style={[s.stackBar, { width: 22, opacity: 1 }]} />
+                  <View style={[s.stackBar, { width: 16, opacity: 0.55 }]} />
+                  <View style={[s.stackBar, { width: 10, opacity: 0.25 }]} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.stackClearTitle}>Your stack is clear</Text>
+                  <Text style={s.stackClearSub}>
+                    No pending obligations right now. Add tasks and Wyle will
+                    surface the most urgent ones here — with step-by-step
+                    actions ready to execute.
+                  </Text>
+                </View>
+              </View>
 
-          {/* 2-column grid for remaining tasks */}
-          {gridTasks.length > 0 && (
-            <View style={s.taskGrid}>
-              {gridTasks.map(item => (
-                <SmallTaskCard key={item.id} item={item} onPress={() => nav.navigate('obligations')} />
-              ))}
-            </View>
-          )}
-        </Animated.View>
+              {/* Preview pills — shows what sections will look like */}
+              <View style={s.stackPreviewRow}>
+                <View style={s.stackPreviewPill}>
+                  <View style={s.stackPreviewDot} />
+                  <Text style={s.stackPreviewLabel}>Priority Tasks</Text>
+                </View>
+                <View style={s.stackPreviewPill}>
+                  <View style={[s.stackPreviewDot, { backgroundColor: C.chartreuse }]} />
+                  <Text style={s.stackPreviewLabel}>Ready to Execute</Text>
+                </View>
+              </View>
 
-        {/* ── Ready to Execute ───────────────────────────────────────────────── */}
-        <Animated.View style={[s.section, { opacity: fadeIn }]}>
-          <View style={s.sectionRow}>
-            <Text style={s.sectionTitle}>READY TO EXECUTE</Text>
-            <View style={s.activeBadge}>
-              <Text style={s.activeBadgeText}>{executeItems.length}</Text>
+              {/* Divider */}
+              <View style={s.stackClearDivider} />
+
+              {/* CTAs */}
+              <TouchableOpacity
+                style={s.stackClearPrimaryBtn}
+                onPress={() => nav.navigate('obligations')}
+                activeOpacity={0.85}
+              >
+                <LinearGradient
+                  colors={[C.verdigris, '#16A085']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={s.stackClearBtnGrad}
+                >
+                  <Text style={s.stackClearPrimaryText}>Add your first task  →</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={s.stackClearSecondaryBtn}
+                onPress={() => nav.navigate('buddy')}
+                activeOpacity={0.85}
+              >
+                <Text style={s.stackClearSecondaryText}>🎙️  Voice Brain Dump with Buddy</Text>
+              </TouchableOpacity>
+
             </View>
-          </View>
-          {executeItems.map(item => (
-            <ExecuteCard
-              key={item.id}
-              item={item}
-              onApprove={() => nav.navigate('buddy')}
-              onReview={() => nav.navigate('buddy')}
-            />
-          ))}
-        </Animated.View>
+          </Animated.View>
+        ) : (
+          <>
+            {/* ── Priority Tasks ──────────────────────────────────────────── */}
+            <Animated.View style={[s.section, { opacity: fadeIn }]}>
+              <View style={s.sectionRow}>
+                <Text style={s.sectionTitle}>PRIORITY TASKS</Text>
+                <View style={s.activeBadge}>
+                  <Text style={s.activeBadgeText}>{activeCount} Active</Text>
+                </View>
+              </View>
+
+              {featuredTask && (
+                <FeaturedTaskCard item={featuredTask} onPress={() => nav.navigate('obligations')} />
+              )}
+
+              {gridTasks.length > 0 && (
+                <View style={s.taskGrid}>
+                  {gridTasks.map(item => (
+                    <SmallTaskCard key={item.id} item={item} onPress={() => nav.navigate('obligations')} />
+                  ))}
+                </View>
+              )}
+            </Animated.View>
+
+            {/* ── Ready to Execute ─────────────────────────────────────────── */}
+            {executeItems.length > 0 && (
+              <Animated.View style={[s.section, { opacity: fadeIn }]}>
+                <View style={s.sectionRow}>
+                  <Text style={s.sectionTitle}>READY TO EXECUTE</Text>
+                  <View style={s.activeBadge}>
+                    <Text style={s.activeBadgeText}>{executeItems.length}</Text>
+                  </View>
+                </View>
+                {executeItems.map(item => (
+                  <ExecuteCard
+                    key={item.id}
+                    item={item}
+                    onApprove={() => nav.navigate('buddy')}
+                    onReview={() => nav.navigate('buddy')}
+                  />
+                ))}
+              </Animated.View>
+            )}
+          </>
+        )}
 
         {/* ── Quick Actions ──────────────────────────────────────────────────── */}
         <Animated.View style={[s.section, { opacity: fadeIn }]}>
@@ -798,6 +867,52 @@ const s = StyleSheet.create({
   urgentSub:      { color: C.textSec, fontSize: 13, marginBottom: 16 },
   urgentBtn:      { borderRadius: 999, paddingVertical: 14, alignItems: 'center' },
   urgentBtnText:  { color: C.white, fontSize: 15, fontWeight: '700' },
+
+  // ── "Stack clear" empty state card ───────────────────────────────────────
+  stackClearCard: {
+    backgroundColor: C.surface,
+    borderRadius: 20, borderWidth: 1, borderColor: C.border,
+    padding: 20, gap: 14,
+  },
+  stackClearTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 14 },
+  stackClearIconWrap: {
+    width: 44, height: 44, borderRadius: 14,
+    backgroundColor: `${C.verdigris}14`,
+    borderWidth: 1, borderColor: `${C.verdigris}30`,
+    alignItems: 'center', justifyContent: 'center',
+    gap: 4, flexShrink: 0,
+  },
+  stackBar: {
+    height: 3, borderRadius: 2, backgroundColor: C.verdigris,
+  },
+  stackClearTitle: { color: C.white, fontSize: 16, fontWeight: '700', marginBottom: 6 },
+  stackClearSub:   { color: C.textSec, fontSize: 13, lineHeight: 20 },
+
+  // Preview pills
+  stackPreviewRow: { flexDirection: 'row', gap: 10 },
+  stackPreviewPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: C.surfaceEl, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: C.border,
+  },
+  stackPreviewDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.verdigris },
+  stackPreviewLabel: { color: C.textTer, fontSize: 11, fontWeight: '600' },
+
+  stackClearDivider: { height: 1, backgroundColor: C.border },
+
+  // Buttons
+  stackClearPrimaryBtn: { borderRadius: 14, overflow: 'hidden' },
+  stackClearBtnGrad: {
+    paddingVertical: 14, alignItems: 'center', borderRadius: 14,
+  },
+  stackClearPrimaryText: { color: C.white, fontSize: 14, fontWeight: '700' },
+  stackClearSecondaryBtn: {
+    paddingVertical: 12, alignItems: 'center',
+    backgroundColor: C.surfaceEl, borderRadius: 14,
+    borderWidth: 1, borderColor: C.border,
+  },
+  stackClearSecondaryText: { color: C.textSec, fontSize: 13, fontWeight: '600' },
 
   // ── Section headers
   section:    { paddingHorizontal: 16, marginBottom: 22 },
