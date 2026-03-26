@@ -1215,13 +1215,119 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
           </Animated.View>
         ))}
 
-        {filtered.length === 0 && (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyEmoji}>✓</Text>
-            <Text style={styles.emptyText}>
-              {filter === 'all' ? 'No active obligations' : `No ${filter} risk items`}
+        {/* ── Empty states ──────────────────────────────────────────────── */}
+
+        {/* Brand-new user: zero tasks at all → full onboarding card */}
+        {active.length === 0 && (
+          <View style={es.wrap}>
+
+            {/* Hero */}
+            <View style={es.heroRow}>
+              <View style={es.heroBadge}>
+                <Text style={es.heroBadgeText}>✦</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={es.heroTitle}>Your Life Stack is empty</Text>
+                <Text style={es.heroSub}>
+                  Track every obligation — renewals, bills, appointments — in one place
+                  so nothing slips through the cracks.
+                </Text>
+              </View>
+            </View>
+
+            {/* Divider */}
+            <View style={es.divider} />
+
+            {/* Section: How to add */}
+            <Text style={es.sectionLabel}>3 WAYS TO ADD TASKS</Text>
+
+            {/* Method 1 — Voice */}
+            <TouchableOpacity style={es.methodCard} onPress={() => setDump(true)} activeOpacity={0.82}>
+              <View style={[es.methodIcon, { backgroundColor: `${C.salmon}18`, borderColor: `${C.salmon}30` }]}>
+                <Text style={es.methodEmoji}>🎙️</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={es.methodTitle}>Voice Brain Dump</Text>
+                <Text style={es.methodDesc}>
+                  Speak freely — "Hospital bill AED 800 next week, car service overdue…"
+                  Buddy structures it into tasks automatically.
+                </Text>
+              </View>
+              <View style={[es.methodBadge, { backgroundColor: `${C.salmon}15` }]}>
+                <Text style={[es.methodBadgeText, { color: C.salmon }]}>FASTEST</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Method 2 — Manual */}
+            <TouchableOpacity style={es.methodCard} onPress={() => setAdd(true)} activeOpacity={0.82}>
+              <View style={[es.methodIcon, { backgroundColor: `${C.chartreuse}18`, borderColor: `${C.chartreuse}30` }]}>
+                <Text style={es.methodEmoji}>＋</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={es.methodTitle}>Add Manually</Text>
+                <Text style={es.methodDesc}>
+                  Tap the <Text style={{ color: C.chartreuse, fontWeight: '700' }}>+</Text> button at the bottom-right to
+                  fill in the title, due date, risk level and amount.
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Method 3 — Buddy chat */}
+            <TouchableOpacity style={es.methodCard} onPress={() => nav.navigate('buddy')} activeOpacity={0.82}>
+              <View style={[es.methodIcon, { backgroundColor: `${C.verdigris}18`, borderColor: `${C.verdigris}30` }]}>
+                <Text style={es.methodEmoji}>✦</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={es.methodTitle}>Ask Buddy</Text>
+                <Text style={es.methodDesc}>
+                  Chat with your AI assistant — say "add my visa renewal due in 45 days"
+                  and Buddy adds it here instantly.
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Divider */}
+            <View style={es.divider} />
+
+            {/* Example categories */}
+            <Text style={es.sectionLabel}>WHAT YOU CAN TRACK</Text>
+            <View style={es.examplesGrid}>
+              {[
+                { emoji: '🛂', label: 'Visa Renewal' },
+                { emoji: '🪪', label: 'Emirates ID' },
+                { emoji: '🚗', label: 'Car Reg.' },
+                { emoji: '🛡️', label: 'Insurance' },
+                { emoji: '💡', label: 'Utility Bills' },
+                { emoji: '🎓', label: 'School Fees' },
+                { emoji: '🏥', label: 'Medical' },
+                { emoji: '💰', label: 'Payments' },
+              ].map(ex => (
+                <View key={ex.label} style={es.exampleChip}>
+                  <Text style={es.exampleEmoji}>{ex.emoji}</Text>
+                  <Text style={es.exampleLabel}>{ex.label}</Text>
+                </View>
+              ))}
+            </View>
+
+          </View>
+        )}
+
+        {/* Has tasks but current filter has none */}
+        {active.length > 0 && filtered.length === 0 && (
+          <View style={es.filterEmptyWrap}>
+            <View style={es.filterEmptyIcon}>
+              <Text style={{ fontSize: 22, color: C.verdigris }}>✓</Text>
+            </View>
+            <Text style={es.filterEmptyTitle}>
+              No {filter === 'high' ? 'urgent' : filter === 'medium' ? 'medium-risk' : 'low-risk'} tasks
             </Text>
-            <Text style={styles.emptySub}>Tap 🎙️ to add tasks by voice</Text>
+            <Text style={es.filterEmptySub}>
+              You have {active.length} task{active.length !== 1 ? 's' : ''} total.
+              Switch to <Text style={{ color: C.white, fontWeight: '700' }}>All</Text> to see them.
+            </Text>
+            <TouchableOpacity style={es.filterEmptyBtn} onPress={() => setFilter('all')}>
+              <Text style={es.filterEmptyBtnText}>View all tasks</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1411,7 +1517,7 @@ const styles = StyleSheet.create({
   },
   resolveBtnText: { color: C.verdigris, fontSize: 16, fontWeight: '700' },
 
-  // Empty
+  // Empty (kept for any residual refs — real states use es.*)
   emptyState:   { alignItems: 'center', paddingVertical: 64, gap: 10 },
   emptyEmoji:   { fontSize: 44, color: C.verdigris },
   emptyText:    { color: C.white, fontSize: 17, fontWeight: '600' },
@@ -1460,6 +1566,91 @@ const styles = StyleSheet.create({
   },
   orbWave:    { flexDirection: 'row', alignItems: 'center', gap: 2 },
   orbWaveBar: { width: 2.5, backgroundColor: '#FFFFFF', borderRadius: 2, opacity: 0.9 },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Empty-state styles (onboarding + filter-miss)
+// ─────────────────────────────────────────────────────────────────────────────
+const es = StyleSheet.create({
+  // ── Full onboarding card ─────────────────────────────────────────────────
+  wrap: {
+    marginTop: 8, marginHorizontal: 0,
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    borderWidth: 1, borderColor: C.border,
+    padding: 20, gap: 16,
+  },
+
+  // Hero row
+  heroRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 14 },
+  heroBadge: {
+    width: 44, height: 44, borderRadius: 14,
+    backgroundColor: `${C.verdigris}18`,
+    borderWidth: 1, borderColor: `${C.verdigris}35`,
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  heroBadgeText: { color: C.verdigris, fontSize: 20, fontWeight: '800' },
+  heroTitle: { color: C.white, fontSize: 16, fontWeight: '700', marginBottom: 6, lineHeight: 22 },
+  heroSub:   { color: C.textSec, fontSize: 13, lineHeight: 20 },
+
+  divider: { height: 1, backgroundColor: C.border },
+
+  sectionLabel: {
+    color: C.textTer, fontSize: 10, fontWeight: '700',
+    letterSpacing: 2, marginBottom: 4,
+  },
+
+  // Method cards
+  methodCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
+    backgroundColor: C.surfaceEl,
+    borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: C.border,
+  },
+  methodIcon: {
+    width: 40, height: 40, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, flexShrink: 0,
+  },
+  methodEmoji: { fontSize: 18 },
+  methodTitle: { color: C.white, fontSize: 14, fontWeight: '700', marginBottom: 4 },
+  methodDesc:  { color: C.textSec, fontSize: 12, lineHeight: 18 },
+  methodBadge: {
+    borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3,
+    alignSelf: 'flex-start', flexShrink: 0,
+  },
+  methodBadgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
+
+  // Examples grid
+  examplesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  exampleChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: C.surfaceEl,
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: C.border,
+  },
+  exampleEmoji: { fontSize: 14 },
+  exampleLabel: { color: C.textSec, fontSize: 11, fontWeight: '600' },
+
+  // ── Filter-miss state ────────────────────────────────────────────────────
+  filterEmptyWrap: { alignItems: 'center', paddingVertical: 52, gap: 10 },
+  filterEmptyIcon: {
+    width: 54, height: 54, borderRadius: 16,
+    backgroundColor: `${C.verdigris}14`,
+    borderWidth: 1, borderColor: `${C.verdigris}30`,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 4,
+  },
+  filterEmptyTitle: { color: C.white, fontSize: 16, fontWeight: '700' },
+  filterEmptySub:   { color: C.textSec, fontSize: 13, textAlign: 'center', lineHeight: 20, paddingHorizontal: 16 },
+  filterEmptyBtn: {
+    marginTop: 6,
+    backgroundColor: `${C.verdigris}18`,
+    borderRadius: 12, borderWidth: 1, borderColor: `${C.verdigris}35`,
+    paddingHorizontal: 22, paddingVertical: 10,
+  },
+  filterEmptyBtnText: { color: C.verdigris, fontSize: 13, fontWeight: '700' },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
