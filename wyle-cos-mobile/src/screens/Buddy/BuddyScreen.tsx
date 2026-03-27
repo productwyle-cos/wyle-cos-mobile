@@ -81,8 +81,10 @@ The user's current context:
 - Respond in English unless user writes in Arabic, then respond in Arabic`;
 
   if (!includeTaskContext) {
-    // General question — return lean prompt with NO task list
-    return personality;
+    // General question — lean prompt, explicitly block any task/obligation bleed-through
+    return `${personality}
+
+STRICT RULE FOR THIS MESSAGE: The user is asking a general question unrelated to their tasks or schedule. Answer ONLY what was asked. Do NOT mention, reference, redirect to, or bring up any tasks, obligations, due dates, bills, fees, priorities, or to-do items — even if you are aware of them from earlier in the conversation. Keep the response completely focused on the question asked.`;
   }
 
   // Task-related question — inject full obligations context
