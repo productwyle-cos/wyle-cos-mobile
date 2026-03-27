@@ -980,17 +980,21 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         ...(taskRelated    ? RESOLVE_TOOL       : []),
       ];
 
+      // web_search_20250305 requires the beta header; other calls work without it
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+        ...(needsLiveData ? { 'anthropic-beta': 'web-search-2025-03-05' } : {}),
+      };
+
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
+        headers,
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,   // increase for web search responses — they can be longer
+          max_tokens: 1024,
           system: buildSystemPrompt(obligations, taskRelated),
           ...(tools.length > 0 ? { tools } : {}),
           messages: history,
@@ -1022,8 +1026,9 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       const buddyMsg: Message = { id: uid(), role: 'buddy', text: responseText, timestamp: new Date() };
       setMessages(prev => [...prev, buddyMsg]);
       if (speakResponse) speakText(responseText);
-    } catch {
-      const fallback = "I'm having a connection issue. Your most urgent item is your UAE visa — it expires in 8 days. Want me to walk you through the GDRFA renewal process?";
+    } catch (err: any) {
+      console.warn('[Buddy] sendMessage error:', err?.message ?? err);
+      const fallback = "Sorry, I'm having a connection issue right now. Please check your internet connection and try again in a moment.";
       setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: fallback, timestamp: new Date() }]);
       if (speakResponse) speakText(fallback);
     } finally {
