@@ -46,10 +46,9 @@ const C = {
 
 const ANTHROPIC_API_KEY   = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY   ?? '';
 const OPENAI_API_KEY      = process.env.EXPO_PUBLIC_OPENAI_API_KEY      ?? '';
-const METALS_API_KEY      = process.env.EXPO_PUBLIC_METALS_API_KEY      ?? '';
 const ALPHAVANTAGE_KEY    = process.env.EXPO_PUBLIC_ALPHAVANTAGE_KEY    ?? '';
 const GNEWS_KEY           = process.env.EXPO_PUBLIC_GNEWS_KEY           ?? '';
-const WEATHER_KEY         = process.env.EXPO_PUBLIC_WEATHER_KEY         ?? '';
+// Open-Meteo weather needs no key (completely free, no signup)
 
 // ── SVG icon assets ───────────────────────────────────────────────────────────
 const MIC_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -216,31 +215,39 @@ async function fetchForexRate(query: string): Promise<string | null> {
   } catch { return null; }
 }
 
-// ── Gold / Silver / Platinum prices (metals-api.com) ─────────────────────────
+// ── Gold / Silver prices via Alpha Vantage (same key as stocks, no extra signup)
 async function fetchMetalPrice(query: string): Promise<string | null> {
-  if (!METALS_API_KEY) return null;
+  if (!ALPHAVANTAGE_KEY) return null;
   const q = query.toLowerCase();
-  if (!q.match(/gold|silver|platinum|metal|xau|xag|xpt/)) return null;
-  try {
+  if (!q.match(/gold|silver|metal|xau|xag/)) return null;
+
+  // Fetch gold and silver in parallel
+  const fetchMetal = async (from: string, label: string) => {
     const res = await fetch(
-      `https://metals-api.com/api/latest?access_key=${METALS_API_KEY}&base=USD&symbols=XAU,XAG,XPT`
+      `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${from}&to_currency=USD&apikey=${ALPHAVANTAGE_KEY}`
     );
     if (!res.ok) return null;
     const data = await res.json();
-    if (!data.success) return null;
-    const r = data.rates;
-    // Metals-API returns how many oz per USD, so invert for price per oz
-    const goldUsd    = r.XAU ? (1 / r.XAU).toFixed(2) : null;
-    const silverUsd  = r.XAG ? (1 / r.XAG).toFixed(2) : null;
-    const platUsd    = r.XPT ? (1 / r.XPT).toFixed(2) : null;
-    // AED = USD × 3.6725
-    const goldAed    = goldUsd   ? (parseFloat(goldUsd)   * 3.6725).toFixed(2) : null;
-    const silverAed  = silverUsd ? (parseFloat(silverUsd) * 3.6725).toFixed(2) : null;
-    const parts: string[] = [];
-    if (goldUsd)   parts.push(`Gold (XAU/oz): $${goldUsd} USD / AED ${goldAed}`);
-    if (silverUsd) parts.push(`Silver (XAG/oz): $${silverUsd} USD / AED ${silverAed}`);
-    if (platUsd)   parts.push(`Platinum (XPT/oz): $${platUsd} USD`);
-    return parts.length ? `[LIVE DATA — MetalsAPI] ${parts.join(' | ')}` : null;
+    const rate = data['Realtime Currency Exchange Rate'];
+    if (!rate) return null;
+    const priceUsd = parseFloat(rate['5. Exchange Rate']).toFixed(2);
+    const priceAed = (parseFloat(priceUsd) * 3.6725).toFixed(2);
+    return `${label}: $${priceUsd}/oz USD | AED ${priceAed}/oz`;
+  };
+
+  try {
+    const wantsGold   = q.match(/gold|xau/);
+    const wantsSilver = q.match(/silver|xag/);
+    const results = await Promise.allSettled([
+      wantsGold   ? fetchMetal('XAU', 'Gold (XAU)')   : Promise.resolve(null),
+      wantsSilver ? fetchMetal('XAG', 'Silver (XAG)') : Promise.resolve(null),
+      // Always fetch gold if query just says "metal" or "price" without specifying
+      (!wantsGold && !wantsSilver) ? fetchMetal('XAU', 'Gold (XAU)') : Promise.resolve(null),
+    ]);
+    const parts = results
+      .map(r => r.status === 'fulfilled' ? r.value : null)
+      .filter(Boolean) as string[];
+    return parts.length ? `[LIVE DATA — AlphaVantage Metals] ${parts.join(' | ')}` : null;
   } catch { return null; }
 }
 
@@ -303,24 +310,48 @@ async function fetchNews(query: string): Promise<string | null> {
   } catch { return null; }
 }
 
-// ── Dubai weather (WeatherAPI) ────────────────────────────────────────────────
+// ── Weather via Open-Meteo (100% free, no API key, no signup) ────────────────
+// City coordinates for the GCC region
+const CITY_COORDS: Record<string, { lat: number; lon: number; name: string }> = {
+  dubai:      { lat: 25.2048, lon: 55.2708, name: 'Dubai' },
+  'abu dhabi':{ lat: 24.4539, lon: 54.3773, name: 'Abu Dhabi' },
+  sharjah:    { lat: 25.3463, lon: 55.4209, name: 'Sharjah' },
+  riyadh:     { lat: 24.6877, lon: 46.7219, name: 'Riyadh' },
+  doha:       { lat: 25.2854, lon: 51.5310, name: 'Doha' },
+  kuwait:     { lat: 29.3759, lon: 47.9774, name: 'Kuwait City' },
+  muscat:     { lat: 23.5880, lon: 58.3829, name: 'Muscat' },
+};
+
+const WMO_CODES: Record<number, string> = {
+  0:'Clear sky', 1:'Mainly clear', 2:'Partly cloudy', 3:'Overcast',
+  45:'Foggy', 48:'Icy fog', 51:'Light drizzle', 53:'Drizzle', 55:'Heavy drizzle',
+  61:'Light rain', 63:'Rain', 65:'Heavy rain', 71:'Light snow', 73:'Snow',
+  80:'Showers', 81:'Heavy showers', 95:'Thunderstorm', 99:'Hail storm',
+};
+
 async function fetchWeather(query: string): Promise<string | null> {
-  if (!WEATHER_KEY) return null;
   const q = query.toLowerCase();
-  if (!q.match(/weather|temperature|forecast|rain|humid|hot|cold|outside|climate/)) return null;
-  // Detect city, default to Dubai
-  const city = q.includes('abu dhabi') ? 'Abu Dhabi'
-             : q.includes('sharjah')   ? 'Sharjah'
-             : q.includes('riyadh')    ? 'Riyadh'
-             : 'Dubai';
+  if (!q.match(/weather|temperature|forecast|rain|humid|hot|cold|outside|climate|sunny/)) return null;
+
+  // Detect city from query, default to Dubai
+  const cityKey = Object.keys(CITY_COORDS).find(k => q.includes(k)) ?? 'dubai';
+  const { lat, lon, name } = CITY_COORDS[cityKey];
+
   try {
     const res = await fetch(
-      `https://api.weatherapi.com/v1/current.json?key=${WEATHER_KEY}&q=${encodeURIComponent(city)}&aqi=no`
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `&current_weather=true&hourly=relativehumidity_2m,apparent_temperature` +
+      `&timezone=Asia%2FDubai&forecast_days=1`
     );
     if (!res.ok) return null;
-    const d = await res.json();
-    const c = d.current;
-    return `[LIVE DATA — WeatherAPI] ${city}: ${c.temp_c}°C (feels ${c.feelslike_c}°C) | ${c.condition?.text} | Humidity: ${c.humidity}% | Wind: ${c.wind_kph} km/h`;
+    const data = await res.json();
+    const cw   = data.current_weather;
+    const cond = WMO_CODES[cw.weathercode] ?? 'Unknown';
+    // Grab current hour humidity from hourly array
+    const hourIdx  = new Date().getHours();
+    const humidity = data.hourly?.relativehumidity_2m?.[hourIdx] ?? '—';
+    const feelsLike = data.hourly?.apparent_temperature?.[hourIdx]?.toFixed(1) ?? '—';
+    return `[LIVE DATA — Open-Meteo] ${name}: ${cw.temperature}°C (feels ${feelsLike}°C) | ${cond} | Humidity: ${humidity}% | Wind: ${cw.windspeed} km/h`;
   } catch { return null; }
 }
 
