@@ -195,13 +195,43 @@ async function fetchCryptoPrice(query: string): Promise<string | null> {
 
 async function fetchForexRate(query: string): Promise<string | null> {
   const q = query.toLowerCase();
-  if (!q.match(/exchange rate|forex|currency|dollar|euro|pound|rupee|dirham|yen|yuan|inr|gbp|eur|jpy/)) return null;
+  if (!q.match(/exchange rate|forex|currency|dollar|euro|pound|rupee|dirham|yen|yuan|inr|gbp|eur|jpy|usd|aed|sar/)) return null;
+
+  // ── Step 1: detect specific currency pair and use Alpha Vantage (real-time) ──
+  const pairMap: Array<[RegExp, string, string]> = [
+    [/rupee|inr/,    'USD', 'INR'],
+    [/dirham|aed/,   'USD', 'AED'],
+    [/euro|eur\b/,   'USD', 'EUR'],
+    [/pound|gbp/,    'USD', 'GBP'],
+    [/yen|jpy/,      'USD', 'JPY'],
+    [/yuan|cny/,     'USD', 'CNY'],
+    [/riyal|sar/,    'USD', 'SAR'],
+  ];
+  const matched = pairMap.find(([re]) => re.test(q));
+
+  if (matched && ALPHAVANTAGE_KEY) {
+    const [, from, to] = matched;
+    try {
+      const res = await fetch(
+        `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE` +
+        `&from_currency=${from}&to_currency=${to}&apikey=${ALPHAVANTAGE_KEY}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const rate = data['Realtime Currency Exchange Rate'];
+        if (rate?.['5. Exchange Rate']) {
+          const price     = parseFloat(rate['5. Exchange Rate']).toFixed(4);
+          const refreshed = rate['6. Last Refreshed'] ?? 'just now';
+          return `[LIVE DATA — AlphaVantage Realtime] ${from}/${to}: ${price} (as of ${refreshed} UTC)`;
+        }
+      }
+    } catch { /* fall through to overview */ }
+  }
+
+  // ── Step 2: fallback — broad overview from Cloudflare Pages (more reliable than jsDelivr) ──
   try {
-    // fawazahmed0 currency API — free, no key, updated daily, highly accurate
-    const res = await fetch(
-      'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json'
-    );
-    if (!res.ok) return null;
+    const res = await fetch('https://latest.currency-api.pages.dev/v1/currencies/usd.json');
+    if (!res.ok) throw new Error('pages.dev failed');
     const data = await res.json();
     const r = data.usd;
     if (!r) return null;
@@ -397,7 +427,7 @@ The user's current context:
 
   // If live data was fetched from a dedicated API, inject it prominently
   const liveBlock = liveDataSnippet
-    ? `\n\nLIVE MARKET DATA (fetched right now — use these exact figures in your answer):\n${liveDataSnippet}`
+    ? `\n\nLIVE MARKET DATA — FETCHED RIGHT NOW (real-time API):\n${liveDataSnippet}\n\nCRITICAL INSTRUCTION: You MUST use ONLY the exact figures shown above. Do NOT use rates from your training data. Do NOT say "around", "approximately", or give a different number. Quote the exact value from LIVE MARKET DATA.`
     : '';
 
   if (!includeTaskContext) {
