@@ -151,15 +151,88 @@ function isRealTimeQuery(text: string): boolean {
 }
 
 // ── Anthropic built-in web search tool ───────────────────────────────────────
-// Server-side tool — Anthropic performs the search automatically.
-// No extra API key needed. Available from API version 2023-06-01 onward.
 const WEB_SEARCH_TOOL = {
   type: 'web_search_20250305' as const,
   name: 'web_search',
 };
 
+// ── Executive data router — fetches live data BEFORE calling Claude ───────────
+// Keeps Claude prompt small and gives accurate numbers from primary sources.
+// Each fetcher returns a string snippet that gets prepended to the system prompt.
+
+async function fetchCryptoPrice(query: string): Promise<string | null> {
+  // Detect coin from query
+  const q = query.toLowerCase();
+  const coinMap: Record<string, string> = {
+    bitcoin: 'bitcoin', btc: 'bitcoin',
+    ethereum: 'ethereum', eth: 'ethereum',
+    xrp: 'ripple', ripple: 'ripple',
+    sol: 'solana', solana: 'solana',
+    bnb: 'binancecoin',
+    usdt: 'tether', tether: 'tether',
+    ada: 'cardano', cardano: 'cardano',
+    doge: 'dogecoin', dogecoin: 'dogecoin',
+  };
+  const coinId = Object.entries(coinMap).find(([k]) => q.includes(k))?.[1];
+  if (!coinId) return null;
+  try {
+    const res = await fetch(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd,aed&include_24hr_change=true`,
+      { headers: { 'Accept': 'application/json' } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const d = data[coinId];
+    if (!d) return null;
+    const change = d.usd_24h_change?.toFixed(2);
+    const sign   = change >= 0 ? '+' : '';
+    return `[LIVE DATA — CoinGecko] ${coinId.charAt(0).toUpperCase() + coinId.slice(1)}: $${d.usd?.toLocaleString()} USD / AED ${d.aed?.toLocaleString()} | 24h: ${sign}${change}%`;
+  } catch { return null; }
+}
+
+async function fetchForexRate(query: string): Promise<string | null> {
+  const q = query.toLowerCase();
+  // Only fetch if question is about currencies/exchange rates
+  if (!q.match(/exchange rate|forex|currency|dollar|euro|pound|rupee|dirham|yen|yuan/)) return null;
+  try {
+    const res = await fetch('https://open.er-api.com/v6/latest/USD');
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rates = data.rates;
+    if (!rates) return null;
+    // Pull the most relevant currencies for Dubai exec
+    const snippet = [
+      `USD/AED: ${rates.AED?.toFixed(4)}`,
+      `USD/EUR: ${rates.EUR?.toFixed(4)}`,
+      `USD/GBP: ${rates.GBP?.toFixed(4)}`,
+      `USD/INR: ${rates.INR?.toFixed(2)}`,
+      `USD/JPY: ${rates.JPY?.toFixed(2)}`,
+    ].join(' | ');
+    return `[LIVE DATA — ExchangeRate-API] ${snippet}`;
+  } catch { return null; }
+}
+
+// Router: try dedicated APIs first, return context string or null
+async function fetchLiveDataContext(query: string): Promise<string | null> {
+  const results = await Promise.allSettled([
+    fetchCryptoPrice(query),
+    fetchForexRate(query),
+  ]);
+  const snippets = results
+    .map(r => r.status === 'fulfilled' ? r.value : null)
+    .filter(Boolean) as string[];
+  return snippets.length > 0 ? snippets.join('\n') : null;
+}
+
+// Max messages sent to Claude API per call — prevents token limit errors
+const API_HISTORY_LIMIT = 12;
+
 // ── System prompt — two modes ─────────────────────────────────────────────────
-function buildSystemPrompt(obligations: UIObligation[], includeTaskContext: boolean): string {
+function buildSystemPrompt(
+  obligations: UIObligation[],
+  includeTaskContext: boolean,
+  liveDataSnippet?: string | null,
+): string {
   const personality = `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
 
 Your personality:
@@ -173,9 +246,13 @@ The user's current context:
 - Location: Dubai, UAE
 - Respond in English unless user writes in Arabic, then respond in Arabic`;
 
+  // If live data was fetched from a dedicated API, inject it prominently
+  const liveBlock = liveDataSnippet
+    ? `\n\nLIVE MARKET DATA (fetched right now — use these exact figures in your answer):\n${liveDataSnippet}`
+    : '';
+
   if (!includeTaskContext) {
-    // General question — lean prompt, explicitly block any task/obligation bleed-through
-    return `${personality}
+    return `${personality}${liveBlock}
 
 STRICT RULE FOR THIS MESSAGE: The user is asking a general question unrelated to their tasks or schedule. Answer ONLY what was asked. Do NOT mention, reference, redirect to, or bring up any tasks, obligations, due dates, bills, fees, priorities, or to-do items — even if you are aware of them from earlier in the conversation. Keep the response completely focused on the question asked.`;
   }
@@ -194,7 +271,7 @@ STRICT RULE FOR THIS MESSAGE: The user is asking a general question unrelated to
     ? completed.map(o => `  * ✅ ${o.emoji} ${o.title}`).join('\n')
     : '';
 
-  return `${personality}
+  return `${personality}${liveBlock}
 
 The user's task context:
 - Life Optimization Score (LOS): 74/100
@@ -1085,16 +1162,27 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     scrollToEnd();
 
     try {
+      // Only send last API_HISTORY_LIMIT messages to avoid token limit errors.
+      // Full history is stored locally (AsyncStorage) but only a window is sent.
       const history = [...messages, userMsg]
+        .slice(-API_HISTORY_LIMIT)
         .map(m => ({
           role: m.role === 'user' ? 'user' : 'assistant' as const,
-          // Use a placeholder for file-only messages so Claude API never receives empty content
           content: m.text.trim() || (m.attachment ? `[User uploaded a ${m.attachment.type}: ${m.attachment.name}]` : '[message]'),
         }))
         .filter(m => m.content.trim().length > 0);
 
       const taskRelated    = isTaskQuery(text.trim());
       const needsLiveData  = isRealTimeQuery(text.trim());
+
+      // ── Executive data router ─────────────────────────────────────────────
+      // For financial/market queries, fetch from dedicated APIs first.
+      // The live snippet is prepended to the system prompt so Claude quotes
+      // real numbers instead of guessing or saying "I don't have access".
+      let liveDataSnippet: string | null = null;
+      if (needsLiveData) {
+        liveDataSnippet = await fetchLiveDataContext(text.trim());
+      }
 
       // Build tools array:
       //  • web_search → for live data queries (sports, flights, prices, news)
@@ -1118,8 +1206,8 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         headers,
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          system: buildSystemPrompt(obligations, taskRelated),
+          max_tokens: 800,
+          system: buildSystemPrompt(obligations, taskRelated, liveDataSnippet),
           ...(tools.length > 0 ? { tools } : {}),
           messages: history,
         }),
