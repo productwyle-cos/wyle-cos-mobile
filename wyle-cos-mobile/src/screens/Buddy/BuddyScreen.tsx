@@ -44,8 +44,12 @@ const C = {
   border:     '#2A2A2A',
 };
 
-const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
-const OPENAI_API_KEY    = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
+const ANTHROPIC_API_KEY   = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY   ?? '';
+const OPENAI_API_KEY      = process.env.EXPO_PUBLIC_OPENAI_API_KEY      ?? '';
+const METALS_API_KEY      = process.env.EXPO_PUBLIC_METALS_API_KEY      ?? '';
+const ALPHAVANTAGE_KEY    = process.env.EXPO_PUBLIC_ALPHAVANTAGE_KEY    ?? '';
+const GNEWS_KEY           = process.env.EXPO_PUBLIC_GNEWS_KEY           ?? '';
+const WEATHER_KEY         = process.env.EXPO_PUBLIC_WEATHER_KEY         ?? '';
 
 // ── SVG icon assets ───────────────────────────────────────────────────────────
 const MIC_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -212,11 +216,123 @@ async function fetchForexRate(query: string): Promise<string | null> {
   } catch { return null; }
 }
 
-// Router: try dedicated APIs first, return context string or null
+// ── Gold / Silver / Platinum prices (metals-api.com) ─────────────────────────
+async function fetchMetalPrice(query: string): Promise<string | null> {
+  if (!METALS_API_KEY) return null;
+  const q = query.toLowerCase();
+  if (!q.match(/gold|silver|platinum|metal|xau|xag|xpt/)) return null;
+  try {
+    const res = await fetch(
+      `https://metals-api.com/api/latest?access_key=${METALS_API_KEY}&base=USD&symbols=XAU,XAG,XPT`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.success) return null;
+    const r = data.rates;
+    // Metals-API returns how many oz per USD, so invert for price per oz
+    const goldUsd    = r.XAU ? (1 / r.XAU).toFixed(2) : null;
+    const silverUsd  = r.XAG ? (1 / r.XAG).toFixed(2) : null;
+    const platUsd    = r.XPT ? (1 / r.XPT).toFixed(2) : null;
+    // AED = USD × 3.6725
+    const goldAed    = goldUsd   ? (parseFloat(goldUsd)   * 3.6725).toFixed(2) : null;
+    const silverAed  = silverUsd ? (parseFloat(silverUsd) * 3.6725).toFixed(2) : null;
+    const parts: string[] = [];
+    if (goldUsd)   parts.push(`Gold (XAU/oz): $${goldUsd} USD / AED ${goldAed}`);
+    if (silverUsd) parts.push(`Silver (XAG/oz): $${silverUsd} USD / AED ${silverAed}`);
+    if (platUsd)   parts.push(`Platinum (XPT/oz): $${platUsd} USD`);
+    return parts.length ? `[LIVE DATA — MetalsAPI] ${parts.join(' | ')}` : null;
+  } catch { return null; }
+}
+
+// ── Stock price (Alpha Vantage) ───────────────────────────────────────────────
+async function fetchStockPrice(query: string): Promise<string | null> {
+  if (!ALPHAVANTAGE_KEY) return null;
+  const q = query.toLowerCase();
+  // Extract ticker or map common company names to tickers
+  const tickerMap: Record<string, string> = {
+    apple: 'AAPL', microsoft: 'MSFT', google: 'GOOGL', alphabet: 'GOOGL',
+    amazon: 'AMZN', meta: 'META', facebook: 'META', tesla: 'TSLA',
+    nvidia: 'NVDA', netflix: 'NFLX', 'saudi aramco': '2222.SR',
+    adnoc: 'ADNOCDIST.AD', 'emaar': 'EMAAR.DU', 'etisalat': 'ETISALAT.AD',
+    'emirates nbd': 'ENBD.DU', 'first abu dhabi': 'FAB.AD',
+  };
+  let symbol = Object.entries(tickerMap).find(([name]) => q.includes(name))?.[1];
+  // Also detect raw tickers like "AAPL stock" or "TSLA price"
+  if (!symbol) {
+    const tickerMatch = query.match(/\b([A-Z]{2,5})\b/);
+    if (tickerMatch) symbol = tickerMatch[1];
+  }
+  if (!symbol) return null;
+  try {
+    const res = await fetch(
+      `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${ALPHAVANTAGE_KEY}`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const quote = data['Global Quote'];
+    if (!quote || !quote['05. price']) return null;
+    const price  = parseFloat(quote['05. price']).toFixed(2);
+    const change = parseFloat(quote['09. change']).toFixed(2);
+    const pct    = parseFloat(quote['10. change percent']).toFixed(2);
+    const sign   = parseFloat(change) >= 0 ? '+' : '';
+    return `[LIVE DATA — AlphaVantage] ${symbol}: $${price} | Change: ${sign}${change} (${sign}${pct}%)`;
+  } catch { return null; }
+}
+
+// ── Business news headlines (GNews) ──────────────────────────────────────────
+async function fetchNews(query: string): Promise<string | null> {
+  if (!GNEWS_KEY) return null;
+  const q = query.toLowerCase();
+  if (!q.match(/news|update|headline|latest|happening|trend|event|market update/)) return null;
+  // Pick topic category based on keywords
+  const topic = q.match(/tech|technology|ai|startup/) ? 'technology'
+              : q.match(/sport|ipl|cricket|football|match/) ? 'sports'
+              : 'business';
+  try {
+    const res = await fetch(
+      `https://gnews.io/api/v4/top-headlines?topic=${topic}&lang=en&max=5&apikey=${GNEWS_KEY}`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const articles = data.articles?.slice(0, 4);
+    if (!articles?.length) return null;
+    const headlines = articles.map((a: any, i: number) =>
+      `${i + 1}. ${a.title} (${a.source?.name})`
+    ).join('\n');
+    return `[LIVE DATA — GNews Top ${topic} headlines]\n${headlines}`;
+  } catch { return null; }
+}
+
+// ── Dubai weather (WeatherAPI) ────────────────────────────────────────────────
+async function fetchWeather(query: string): Promise<string | null> {
+  if (!WEATHER_KEY) return null;
+  const q = query.toLowerCase();
+  if (!q.match(/weather|temperature|forecast|rain|humid|hot|cold|outside|climate/)) return null;
+  // Detect city, default to Dubai
+  const city = q.includes('abu dhabi') ? 'Abu Dhabi'
+             : q.includes('sharjah')   ? 'Sharjah'
+             : q.includes('riyadh')    ? 'Riyadh'
+             : 'Dubai';
+  try {
+    const res = await fetch(
+      `https://api.weatherapi.com/v1/current.json?key=${WEATHER_KEY}&q=${encodeURIComponent(city)}&aqi=no`
+    );
+    if (!res.ok) return null;
+    const d = await res.json();
+    const c = d.current;
+    return `[LIVE DATA — WeatherAPI] ${city}: ${c.temp_c}°C (feels ${c.feelslike_c}°C) | ${c.condition?.text} | Humidity: ${c.humidity}% | Wind: ${c.wind_kph} km/h`;
+  } catch { return null; }
+}
+
+// ── Router: try ALL dedicated APIs in parallel, return combined context ───────
 async function fetchLiveDataContext(query: string): Promise<string | null> {
   const results = await Promise.allSettled([
     fetchCryptoPrice(query),
     fetchForexRate(query),
+    fetchMetalPrice(query),
+    fetchStockPrice(query),
+    fetchNews(query),
+    fetchWeather(query),
   ]);
   const snippets = results
     .map(r => r.status === 'fulfilled' ? r.value : null)
