@@ -45,7 +45,47 @@ const C = {
 const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 const OPENAI_API_KEY    = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
-function buildSystemPrompt(obligations: UIObligation[]): string {
+// ── Detect whether a message needs task context ───────────────────────────────
+// Only inject obligations into the system prompt when the user is asking about
+// their tasks / priorities / automations. General questions (definitions, prices,
+// news, etc.) get a lean prompt with no task list — so Buddy never references
+// unrelated tasks in those replies.
+const TASK_KEYWORDS = [
+  'task', 'obligation', 'priority', 'priorities', 'urgent', 'due', 'deadline',
+  'pending', 'complete', 'completed', 'done', 'finish', 'resolve', 'resolved',
+  'mark', 'paid', 'automat', 'remind', 'schedule', 'overdue', 'brief',
+  'morning brief', 'today\'s', 'this week', 'what do i have', 'what should i',
+  'what have i', 'los score', 'optimization score', 'top item', 'top priority',
+  'my list', 'my tasks', 'my obligation', 'visa', 'dewa', 'salik', 'bill',
+  'invoice', 'rent', 'insurance', 'renewal', 'expire', 'expir',
+];
+
+function isTaskQuery(text: string): boolean {
+  const lower = text.toLowerCase();
+  return TASK_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// ── System prompt — two modes ─────────────────────────────────────────────────
+function buildSystemPrompt(obligations: UIObligation[], includeTaskContext: boolean): string {
+  const personality = `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
+
+Your personality:
+- Calm, confident, warm, direct. You speak like a trusted friend who is highly competent.
+- Every reply saves the user time. Be short and actionable. Max 3-4 sentences unless asked for more.
+- Never panic. Focus on solutions.
+- Human and respectful. Never robotic.
+- When responding to voice, keep it even shorter — 2-3 sentences max so it sounds natural spoken aloud.
+
+The user's current context:
+- Location: Dubai, UAE
+- Respond in English unless user writes in Arabic, then respond in Arabic`;
+
+  if (!includeTaskContext) {
+    // General question — return lean prompt with NO task list
+    return personality;
+  }
+
+  // Task-related question — inject full obligations context
   const active    = obligations.filter(o => o.status === 'active');
   const completed = obligations.filter(o => o.status === 'completed');
 
@@ -59,28 +99,19 @@ function buildSystemPrompt(obligations: UIObligation[]): string {
     ? completed.map(o => `  * ✅ ${o.emoji} ${o.title}`).join('\n')
     : '';
 
-  return `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
+  return `${personality}
 
-Your personality:
-- Calm, confident, warm, direct. You speak like a trusted friend who is highly competent.
-- Every reply saves the user time. Be short and actionable. Max 3-4 sentences unless asked for more.
-- Never panic. Focus on solutions.
-- Human and respectful. Never robotic.
-- When responding to voice, keep it even shorter — 2-3 sentences max so it sounds natural spoken aloud.
-
-The user's current life context:
+The user's task context:
 - Life Optimization Score (LOS): 74/100
-- Location: Dubai, UAE
 - Active obligations (${active.length}):
 ${activeList}${completedList ? `\n- Already completed:\n${completedList}` : ''}
 - Time saved this week: 4h 20m
 - Decisions handled: 12
 
 Rules:
-- Always show a certainty score (e.g. "95% confident") before suggesting an action
+- Always show a certainty score (e.g. "95% confident") before suggesting a task action
 - When the user says they have paid, completed, done, or resolved an obligation, check the "Already completed" list first. If it is already there, tell the user it was already marked done — do NOT call the resolve_obligation tool again.
-- Only call resolve_obligation for obligations that are currently in the Active obligations list.
-- Respond in English unless user writes in Arabic, then respond in Arabic`;
+- Only call resolve_obligation for obligations that are currently in the Active obligations list.`;
 }
 
 const RESOLVE_TOOL = [{
@@ -906,6 +937,11 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         }))
         .filter(m => m.content.trim().length > 0);
 
+      // Only inject task context when the message is about tasks / priorities.
+      // General questions (definitions, prices, news, etc.) get a lean prompt
+      // so Buddy never mentions unrelated obligations in those replies.
+      const taskRelated = isTaskQuery(text.trim());
+
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -917,8 +953,10 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
           max_tokens: 500,
-          system: buildSystemPrompt(obligations),
-          tools: RESOLVE_TOOL,
+          system: buildSystemPrompt(obligations, taskRelated),
+          // Only pass the resolve tool when task context is active —
+          // no point offering it for a question about gold prices
+          ...(taskRelated ? { tools: RESOLVE_TOOL } : {}),
           messages: history,
         }),
       });
