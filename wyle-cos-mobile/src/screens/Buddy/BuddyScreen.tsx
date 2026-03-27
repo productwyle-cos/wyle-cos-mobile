@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { SvgXml } from 'react-native-svg';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
@@ -45,6 +46,28 @@ const C = {
 
 const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 const OPENAI_API_KEY    = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
+
+// ── SVG icon assets ───────────────────────────────────────────────────────────
+const MIC_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="9" y="2" width="6" height="11" rx="3" fill="#FFFFFF"/>
+  <path d="M5 11a7 7 0 0 0 14 0" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" fill="none"/>
+  <line x1="12" y1="18" x2="12" y2="22" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+  <line x1="8" y1="22" x2="16" y2="22" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+</svg>`;
+
+const STOP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="7" y="7" width="10" height="10" rx="2" fill="#FFFFFF"/>
+</svg>`;
+
+const SEND_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <path d="M12 20V4" stroke="#0D0D0D" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M5 11l7-7 7 7" stroke="#0D0D0D" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>`;
+
+const PLUS_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <line x1="12" y1="5" x2="12" y2="19" stroke="#1B998B" stroke-width="2.2" stroke-linecap="round"/>
+  <line x1="5" y1="12" x2="19" y2="12" stroke="#1B998B" stroke-width="2.2" stroke-linecap="round"/>
+</svg>`;
 
 // ── Chat history persistence ──────────────────────────────────────────────────
 const HISTORY_STORAGE_KEY = '@wyle:buddy_history';
@@ -465,38 +488,79 @@ const bub = StyleSheet.create({
 // Mic button with animated ring
 // ─────────────────────────────────────────────────────────────────────────────
 function MicButton({ voiceState, onPress }: { voiceState: VoiceState; onPress: () => void }) {
-  const pulse = useRef(new Animated.Value(1)).current;
+  const pulse  = useRef(new Animated.Value(1)).current;
+  const ripple = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (voiceState === 'recording') {
       Animated.loop(Animated.sequence([
-        Animated.timing(pulse, { toValue: 1.3, duration: 600, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 1,   duration: 600, useNativeDriver: true }),
+        Animated.timing(pulse,  { toValue: 1.1,  duration: 800, useNativeDriver: true }),
+        Animated.timing(pulse,  { toValue: 1,    duration: 800, useNativeDriver: true }),
+      ])).start();
+      Animated.loop(Animated.sequence([
+        Animated.timing(ripple, { toValue: 1,    duration: 900, useNativeDriver: true }),
+        Animated.timing(ripple, { toValue: 0,    duration: 0,   useNativeDriver: true }),
       ])).start();
     } else {
       pulse.stopAnimation();
-      pulse.setValue(1);
+      ripple.stopAnimation();
+      Animated.timing(pulse,  { toValue: 1, duration: 150, useNativeDriver: true }).start();
+      ripple.setValue(0);
     }
   }, [voiceState]);
 
   const isRecording    = voiceState === 'recording';
   const isTranscribing = voiceState === 'transcribing';
-  const bgColor     = isRecording ? `${C.salmon}28` : isTranscribing ? `${C.chartreuse}18` : `${C.salmon}14`;
-  const borderColor = isRecording ? C.salmon : isTranscribing ? C.chartreuse : `${C.salmon}38`;
+
+  const rippleScale   = ripple.interpolate({ inputRange: [0, 1], outputRange: [1, 1.7] });
+  const rippleOpacity = ripple.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.4, 0.15, 0] });
 
   return (
-    <TouchableOpacity onPress={onPress} disabled={isTranscribing}>
-      <Animated.View style={[mic.btn, { backgroundColor: bgColor, borderColor, transform: [{ scale: pulse }] }]}>
-        {isTranscribing
-          ? <ActivityIndicator color={C.chartreuse} size="small" />
-          : <Text style={{ fontSize: 18 }}>{isRecording ? '⏹️' : '🎙️'}</Text>
-        }
-      </Animated.View>
+    <TouchableOpacity onPress={onPress} disabled={isTranscribing} activeOpacity={0.8}>
+      <View style={mic.wrap}>
+        {/* Ripple ring — only visible while recording */}
+        {isRecording && (
+          <Animated.View style={[
+            mic.ripple,
+            { transform: [{ scale: rippleScale }], opacity: rippleOpacity },
+          ]} />
+        )}
+        <Animated.View style={[
+          mic.btn,
+          isRecording    && mic.btnRecording,
+          isTranscribing && mic.btnProcessing,
+          { transform: [{ scale: pulse }] },
+        ]}>
+          {isTranscribing
+            ? <ActivityIndicator color={C.white} size="small" />
+            : <SvgXml xml={isRecording ? STOP_SVG : MIC_SVG} width={18} height={18} />
+          }
+        </Animated.View>
+      </View>
     </TouchableOpacity>
   );
 }
 const mic = StyleSheet.create({
-  btn: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  wrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  ripple: {
+    position: 'absolute',
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: C.crimson,
+  },
+  btn: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: C.surfaceEl,
+    borderWidth: 1.5, borderColor: `${C.salmon}50`,
+  },
+  btnRecording: {
+    backgroundColor: C.crimson,
+    borderColor: C.crimson,
+  },
+  btnProcessing: {
+    backgroundColor: C.verdigris,
+    borderColor: C.verdigris,
+  },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1194,12 +1258,24 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         <View style={s.header}>
           {/* Buddy identity */}
           <View style={s.headerLeft}>
-            <View style={s.buddyRing}>
-              <Text style={s.buddyRingIcon}>◎</Text>
+            {/* Avatar: concentric rings + orb core */}
+            <View style={s.avatarOuter}>
+              <View style={s.avatarInner}>
+                <LinearGradient
+                  colors={[C.verdigris, '#0D7A6E']}
+                  style={s.avatarGrad}
+                >
+                  <SvgXml xml={MIC_SVG} width={16} height={16} />
+                </LinearGradient>
+              </View>
             </View>
+
             <View>
               <Text style={s.headerTitle}>Buddy</Text>
-              <Text style={s.headerSub}>Personal Chief of Staff</Text>
+              <View style={s.headerSubRow}>
+                <View style={s.onlineDot} />
+                <Text style={s.headerSub}>Personal Chief of Staff</Text>
+              </View>
             </View>
           </View>
 
@@ -1207,7 +1283,8 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
           <View style={s.headerRight}>
             {isSpeaking && (
               <TouchableOpacity style={s.speakingBtn} onPress={stopSpeaking}>
-                <Text style={s.speakingBtnText}>⏸ Stop</Text>
+                <SvgXml xml={STOP_SVG} width={12} height={12} />
+                <Text style={s.speakingBtnText}>Stop</Text>
               </TouchableOpacity>
             )}
             <MicButton voiceState={voiceState} onPress={handleVoicePress} />
@@ -1340,11 +1417,12 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         <View style={s.inputBar}>
           {/* + Attach button */}
           <TouchableOpacity
-            style={s.attachBtn}
+            style={[s.attachBtn, voiceState !== 'idle' && { opacity: 0.4 }]}
             onPress={() => setAttachMenuVisible(true)}
             disabled={voiceState !== 'idle'}
+            activeOpacity={0.75}
           >
-            <Text style={s.attachBtnText}>＋</Text>
+            <SvgXml xml={PLUS_SVG} width={20} height={20} />
           </TouchableOpacity>
 
           <TextInput
@@ -1373,7 +1451,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
           >
             {loading
               ? <ActivityIndicator color={C.bg} size="small" />
-              : <Text style={s.sendIcon}>↑</Text>
+              : <SvgXml xml={SEND_SVG} width={18} height={18} />
             }
           </TouchableOpacity>
         </View>
@@ -1449,21 +1527,38 @@ const s = StyleSheet.create({
     paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10,
   },
   headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  buddyRing: {
-    width: 42, height: 42, borderRadius: 21,
-    backgroundColor: `${C.verdigris}18`,
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+
+  // Avatar — outer ring + inner ring + gradient core
+  avatarOuter: {
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: `${C.verdigris}12`,
+    borderWidth: 1.5, borderColor: `${C.verdigris}35`,
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: C.verdigris,
   },
-  buddyRingIcon: { color: C.verdigris, fontSize: 20 },
-  headerTitle:   { color: C.white, fontSize: 18, fontWeight: '700' },
-  headerSub:     { color: C.textSec, fontSize: 11 },
+  avatarInner: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: `${C.verdigris}20`,
+    borderWidth: 1, borderColor: `${C.verdigris}55`,
+    alignItems: 'center', justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarGrad: {
+    width: 38, height: 38, borderRadius: 19,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  headerTitle: { color: C.white, fontSize: 17, fontWeight: '700', letterSpacing: -0.2 },
+  headerSubRow:{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
+  onlineDot:   { width: 6, height: 6, borderRadius: 3, backgroundColor: '#34C759' },
+  headerSub:   { color: C.textSec, fontSize: 11 },
+
   speakingBtn: {
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
-    backgroundColor: `${C.salmon}14`, borderWidth: 1, borderColor: `${C.salmon}30`,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20,
+    backgroundColor: `${C.salmon}14`, borderWidth: 1, borderColor: `${C.salmon}35`,
   },
-  speakingBtnText: { color: C.salmon, fontSize: 13, fontWeight: '600' },
+  speakingBtnText: { color: C.salmon, fontSize: 12, fontWeight: '700' },
 
   // ── Status bar
   statusBar: {
@@ -1520,27 +1615,35 @@ const s = StyleSheet.create({
 
   // ── Input bar
   inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: 8,
-    paddingHorizontal: 12, paddingVertical: 10,
-    borderTopWidth: 1, borderColor: C.border, backgroundColor: C.bg,
+    flexDirection: 'row', alignItems: 'flex-end', gap: 10,
+    paddingHorizontal: 14, paddingTop: 12, paddingBottom: 14,
+    backgroundColor: '#0F0F0F',
+    borderTopWidth: 1, borderTopColor: C.border,
   },
   input: {
-    flex: 1, backgroundColor: C.surface, borderRadius: 22,
-    paddingHorizontal: 16, paddingVertical: 11,
-    color: C.white, fontSize: 15, maxHeight: 100,
-    borderWidth: 1, borderColor: C.border,
+    flex: 1, backgroundColor: C.surface, borderRadius: 26,
+    paddingHorizontal: 18, paddingVertical: 12,
+    color: C.white, fontSize: 15, maxHeight: 110, lineHeight: 20,
+    borderWidth: 1, borderColor: '#333333',
   },
-  sendBtn:  { width: 44, height: 44, borderRadius: 22, backgroundColor: C.chartreuse, alignItems: 'center', justifyContent: 'center' },
-  sendIcon: { color: C.bg, fontSize: 22, fontWeight: '700', lineHeight: 26 },
-
-  // ── Attach button
-  attachBtn: {
-    width: 40, height: 40, borderRadius: 12,
-    backgroundColor: C.surfaceEl,
+  sendBtn: {
+    width: 46, height: 46, borderRadius: 23,
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.chartreuse,
+    elevation: 3,
+    shadowColor: C.chartreuse,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
   },
-  attachBtnText: { color: C.verdigris, fontSize: 22, lineHeight: 26, fontWeight: '300' },
+
+  // ── Attach button — clean circle with verdigris + border
+  attachBtn: {
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: C.surface,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: `${C.verdigris}45`,
+  },
 
   // ── Pending attachment preview strip
   attachPreviewBar: {
