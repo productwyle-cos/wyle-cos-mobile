@@ -195,23 +195,25 @@ async function fetchCryptoPrice(query: string): Promise<string | null> {
 
 async function fetchForexRate(query: string): Promise<string | null> {
   const q = query.toLowerCase();
-  // Only fetch if question is about currencies/exchange rates
-  if (!q.match(/exchange rate|forex|currency|dollar|euro|pound|rupee|dirham|yen|yuan/)) return null;
+  if (!q.match(/exchange rate|forex|currency|dollar|euro|pound|rupee|dirham|yen|yuan|inr|gbp|eur|jpy/)) return null;
   try {
-    const res = await fetch('https://open.er-api.com/v6/latest/USD');
+    // fawazahmed0 currency API — free, no key, updated daily, highly accurate
+    const res = await fetch(
+      'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json'
+    );
     if (!res.ok) return null;
     const data = await res.json();
-    const rates = data.rates;
-    if (!rates) return null;
-    // Pull the most relevant currencies for Dubai exec
+    const r = data.usd;
+    if (!r) return null;
     const snippet = [
-      `USD/AED: ${rates.AED?.toFixed(4)}`,
-      `USD/EUR: ${rates.EUR?.toFixed(4)}`,
-      `USD/GBP: ${rates.GBP?.toFixed(4)}`,
-      `USD/INR: ${rates.INR?.toFixed(2)}`,
-      `USD/JPY: ${rates.JPY?.toFixed(2)}`,
+      `USD/AED: ${r.aed?.toFixed(4)}`,
+      `USD/EUR: ${r.eur?.toFixed(4)}`,
+      `USD/GBP: ${r.gbp?.toFixed(4)}`,
+      `USD/INR: ${r.inr?.toFixed(2)}`,
+      `USD/JPY: ${r.jpy?.toFixed(2)}`,
+      `USD/SAR: ${r.sar?.toFixed(4)}`,
     ].join(' | ');
-    return `[LIVE DATA — ExchangeRate-API] ${snippet}`;
+    return `[LIVE DATA — CurrencyAPI] ${snippet}`;
   } catch { return null; }
 }
 
@@ -810,8 +812,9 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
     timestamp: new Date(),
   };
 
-  const [messages, setMessages]       = useState<Message[]>([WELCOME_MSG]);
+  const [messages, setMessages]           = useState<Message[]>([WELCOME_MSG]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [input, setInput]             = useState('');
   const [loading, setLoading]         = useState(false);
   const [showQuick, setShowQuick]     = useState(true);
@@ -1233,6 +1236,15 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     scrollToEnd();
   };
 
+  const handleClearChat = async () => {
+    setShowClearConfirm(false);
+    await AsyncStorage.removeItem(HISTORY_STORAGE_KEY);
+    setMessages([WELCOME_MSG]);
+    setShowQuick(true);
+    setPendingResolve(null);
+    setPendingObligationFromScan(null);
+  };
+
   const handleCancelResolve = () => {
     if (!pendingResolve) return;
     const msg = `No problem! "${pendingResolve.title}" stays in your active list.`;
@@ -1332,11 +1344,13 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       }
 
       // Build tools array:
-      //  • web_search → for live data queries (sports, flights, prices, news)
-      //  • resolve_obligation → only for task-related queries
+      // • web_search — fallback ONLY when real-time needed but dedicated API
+      //   returned nothing (prevents double-fetching + token bloat)
+      // • resolve_obligation — only for task-related queries
+      const useWebSearch = needsLiveData && !liveDataSnippet;
       const tools: any[] = [
-        ...(needsLiveData  ? [WEB_SEARCH_TOOL] : []),
-        ...(taskRelated    ? RESOLVE_TOOL       : []),
+        ...(useWebSearch ? [WEB_SEARCH_TOOL] : []),
+        ...(taskRelated  ? RESOLVE_TOOL      : []),
       ];
 
       // web_search_20250305 requires the beta header; other calls work without it
@@ -1345,7 +1359,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true',
-        ...(needsLiveData ? { 'anthropic-beta': 'web-search-2025-03-05' } : {}),
+        ...(useWebSearch ? { 'anthropic-beta': 'web-search-2025-03-05' } : {}),
       };
 
       const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1522,6 +1536,16 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
                 <Text style={s.speakingBtnText}>Stop</Text>
               </TouchableOpacity>
             )}
+            {/* Clear chat button */}
+            {messages.length > 1 && (
+              <TouchableOpacity
+                style={s.clearBtn}
+                onPress={() => setShowClearConfirm(true)}
+                activeOpacity={0.75}
+              >
+                <Text style={s.clearBtnText}>Clear</Text>
+              </TouchableOpacity>
+            )}
             <MicButton voiceState={voiceState} onPress={handleVoicePress} />
           </View>
         </View>
@@ -1691,6 +1715,37 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
           </TouchableOpacity>
         </View>
 
+        {/* ── Clear chat confirmation modal ──────────────────────────── */}
+        <Modal
+          visible={showClearConfirm}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowClearConfirm(false)}
+        >
+          <View style={s.clearOverlay}>
+            <View style={s.clearBox}>
+              <Text style={s.clearBoxTitle}>Clear chat history?</Text>
+              <Text style={s.clearBoxSub}>
+                All messages will be permanently deleted. This cannot be undone.
+              </Text>
+              <View style={s.clearBoxBtns}>
+                <TouchableOpacity
+                  style={s.clearBoxCancel}
+                  onPress={() => setShowClearConfirm(false)}
+                >
+                  <Text style={s.clearBoxCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={s.clearBoxConfirm}
+                  onPress={handleClearChat}
+                >
+                  <Text style={s.clearBoxConfirmText}>Clear</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* Attachment menu modal */}
         <Modal
           visible={attachMenuVisible}
@@ -1794,6 +1849,38 @@ const s = StyleSheet.create({
     backgroundColor: `${C.salmon}14`, borderWidth: 1, borderColor: `${C.salmon}35`,
   },
   speakingBtnText: { color: C.salmon, fontSize: 12, fontWeight: '700' },
+
+  // Clear chat button
+  clearBtn: {
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20,
+    backgroundColor: C.surfaceEl, borderWidth: 1, borderColor: C.border,
+  },
+  clearBtnText: { color: C.textSec, fontSize: 12, fontWeight: '600' },
+
+  // Clear confirmation modal
+  clearOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.65)',
+    alignItems: 'center', justifyContent: 'center', padding: 32,
+  },
+  clearBox: {
+    backgroundColor: C.surfaceEl, borderRadius: 20,
+    padding: 24, width: '100%',
+    borderWidth: 1, borderColor: C.border,
+  },
+  clearBoxTitle: { color: C.white, fontSize: 17, fontWeight: '700', marginBottom: 8 },
+  clearBoxSub:   { color: C.textSec, fontSize: 14, lineHeight: 20, marginBottom: 24 },
+  clearBoxBtns:  { flexDirection: 'row', gap: 12 },
+  clearBoxCancel: {
+    flex: 1, paddingVertical: 13, borderRadius: 14,
+    backgroundColor: C.surfaceHi, alignItems: 'center',
+    borderWidth: 1, borderColor: C.border,
+  },
+  clearBoxCancelText: { color: C.textSec, fontSize: 14, fontWeight: '600' },
+  clearBoxConfirm: {
+    flex: 1, paddingVertical: 13, borderRadius: 14,
+    backgroundColor: C.crimson, alignItems: 'center',
+  },
+  clearBoxConfirmText: { color: C.white, fontSize: 14, fontWeight: '700' },
 
   // ── Status bar
   statusBar: {
