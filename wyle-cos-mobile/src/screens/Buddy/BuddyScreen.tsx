@@ -46,10 +46,6 @@ const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 const OPENAI_API_KEY    = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
 // ── Detect whether a message needs task context ───────────────────────────────
-// Only inject obligations into the system prompt when the user is asking about
-// their tasks / priorities / automations. General questions (definitions, prices,
-// news, etc.) get a lean prompt with no task list — so Buddy never references
-// unrelated tasks in those replies.
 const TASK_KEYWORDS = [
   'task', 'obligation', 'priority', 'priorities', 'urgent', 'due', 'deadline',
   'pending', 'complete', 'completed', 'done', 'finish', 'resolve', 'resolved',
@@ -64,6 +60,40 @@ function isTaskQuery(text: string): boolean {
   const lower = text.toLowerCase();
   return TASK_KEYWORDS.some(kw => lower.includes(kw));
 }
+
+// ── Detect whether a message needs live web data ──────────────────────────────
+// These queries need real-time information — sports scores, flights, prices,
+// weather, news, etc. We pass Anthropic's built-in web_search tool so Claude
+// can fetch live data server-side without any extra API key.
+const REALTIME_KEYWORDS = [
+  // sports / events
+  'won', 'winner', 'score', 'match', 'game', 'result', 'played', 'tournament',
+  'ipl', 'cricket', 'football', 'fifa', 'nba', 'ufc', 'f1', 'grand prix',
+  // travel / flights
+  'flight', 'flights', 'available flight', 'booking', 'ticket', 'airlines',
+  'travel to', 'fly to', 'airport',
+  // prices / markets
+  'gold rate', 'gold price', 'silver price', 'dollar rate', 'exchange rate',
+  'stock price', 'share price', 'crypto', 'bitcoin',
+  // news / world events
+  'latest news', 'current update', 'breaking', 'war', 'election', 'today news',
+  'what happened', 'update on', 'news about',
+  // weather
+  'weather', 'temperature', 'forecast', 'rain', 'humidity',
+];
+
+function isRealTimeQuery(text: string): boolean {
+  const lower = text.toLowerCase();
+  return REALTIME_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// ── Anthropic built-in web search tool ───────────────────────────────────────
+// Server-side tool — Anthropic performs the search automatically.
+// No extra API key needed. Available from API version 2023-06-01 onward.
+const WEB_SEARCH_TOOL = {
+  type: 'web_search_20250305' as const,
+  name: 'web_search',
+};
 
 // ── System prompt — two modes ─────────────────────────────────────────────────
 function buildSystemPrompt(obligations: UIObligation[], includeTaskContext: boolean): string {
@@ -939,10 +969,16 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         }))
         .filter(m => m.content.trim().length > 0);
 
-      // Only inject task context when the message is about tasks / priorities.
-      // General questions (definitions, prices, news, etc.) get a lean prompt
-      // so Buddy never mentions unrelated obligations in those replies.
-      const taskRelated = isTaskQuery(text.trim());
+      const taskRelated    = isTaskQuery(text.trim());
+      const needsLiveData  = isRealTimeQuery(text.trim());
+
+      // Build tools array:
+      //  • web_search → for live data queries (sports, flights, prices, news)
+      //  • resolve_obligation → only for task-related queries
+      const tools: any[] = [
+        ...(needsLiveData  ? [WEB_SEARCH_TOOL] : []),
+        ...(taskRelated    ? RESOLVE_TOOL       : []),
+      ];
 
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -954,11 +990,9 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         },
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 500,
+          max_tokens: 1024,   // increase for web search responses — they can be longer
           system: buildSystemPrompt(obligations, taskRelated),
-          // Only pass the resolve tool when task context is active —
-          // no point offering it for a question about gold prices
-          ...(taskRelated ? { tools: RESOLVE_TOOL } : {}),
+          ...(tools.length > 0 ? { tools } : {}),
           messages: history,
         }),
       });
@@ -966,6 +1000,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || 'API error');
 
+      // Handle resolve_obligation tool call (client-side tool — needs confirmation)
       if (data.stop_reason === 'tool_use') {
         const toolUse = data.content?.find((c: any) => c.type === 'tool_use');
         if (toolUse?.name === 'resolve_obligation') {
@@ -978,7 +1013,12 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         }
       }
 
-      const responseText = data.content?.[0]?.text ?? "Something went wrong. Try again?";
+      // web_search is a server-side tool — Anthropic handles it automatically.
+      // The response content array may contain tool_use + tool_result + text blocks.
+      // Always extract the LAST text block which contains the final answer.
+      const textBlocks = (data.content ?? []).filter((c: any) => c.type === 'text');
+      const responseText = textBlocks[textBlocks.length - 1]?.text ?? "Something went wrong. Try again?";
+
       const buddyMsg: Message = { id: uid(), role: 'buddy', text: responseText, timestamp: new Date() };
       setMessages(prev => [...prev, buddyMsg]);
       if (speakResponse) speakText(responseText);
