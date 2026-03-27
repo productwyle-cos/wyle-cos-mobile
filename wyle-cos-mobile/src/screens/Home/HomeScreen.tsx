@@ -16,6 +16,7 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { UIObligation } from '../../types';
 import { generateBrief, getBriefKey, getBriefTimeOfDay, isBriefStale } from '../../services/briefService';
+import { saveMorningSnapshot, getDayProgress } from '../../services/snapshotService';
 import { signInWithGoogle, isGoogleConnected, handleGoogleOAuthCallback } from '../../services/googleAuthService';
 import { runFullSignalScan } from '../../services/signalService';
 
@@ -412,13 +413,26 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       Animated.spring(slideUp, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true }),
     ]).start();
 
-    // Generate brief once per period
+    // Generate brief once per period (morning or evening)
     if (isBriefStale(lastBriefKey)) {
       setBriefLoading(true);
-      generateBrief(obligations, MOCK_STATS.reliable)
-        .then(brief => { setMorningBrief(brief); setLastBriefKey(getBriefKey()); })
-        .catch(() => {})
-        .finally(() => setBriefLoading(false));
+      const isEvening = getBriefTimeOfDay() === 'evening';
+
+      if (!isEvening) {
+        // Morning: save today's obligation snapshot FIRST, then generate brief
+        saveMorningSnapshot(obligations).catch(() => {});
+        generateBrief(obligations, MOCK_STATS.reliable)
+          .then(brief => { setMorningBrief(brief); setLastBriefKey(getBriefKey()); })
+          .catch(() => {})
+          .finally(() => setBriefLoading(false));
+      } else {
+        // Evening: load day progress (completed vs pending) then generate brief
+        getDayProgress(obligations)
+          .then(dayProgress => generateBrief(obligations, MOCK_STATS.reliable, dayProgress))
+          .then(brief => { setMorningBrief(brief); setLastBriefKey(getBriefKey()); })
+          .catch(() => {})
+          .finally(() => setBriefLoading(false));
+      }
     }
 
     return () => clearInterval(tick);
@@ -491,10 +505,20 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
 
     if (briefLoading) return; // already in-flight
     setBriefLoading(true);
-    generateBrief(obligations, MOCK_STATS.reliable)
-      .then(b => { setMorningBrief(b); setLastBriefKey(getBriefKey()); })
-      .catch(() => {})
-      .finally(() => setBriefLoading(false));
+    const isEvening = getBriefTimeOfDay() === 'evening';
+    if (!isEvening) {
+      saveMorningSnapshot(obligations).catch(() => {});
+      generateBrief(obligations, MOCK_STATS.reliable)
+        .then(b => { setMorningBrief(b); setLastBriefKey(getBriefKey()); })
+        .catch(() => {})
+        .finally(() => setBriefLoading(false));
+    } else {
+      getDayProgress(obligations)
+        .then(dp => generateBrief(obligations, MOCK_STATS.reliable, dp))
+        .then(b  => { setMorningBrief(b); setLastBriefKey(getBriefKey()); })
+        .catch(() => {})
+        .finally(() => setBriefLoading(false));
+    }
   }, [obligations]);
 
   return (
