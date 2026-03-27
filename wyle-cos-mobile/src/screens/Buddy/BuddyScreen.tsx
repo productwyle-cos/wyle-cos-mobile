@@ -21,6 +21,7 @@ import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
 import { UIObligation } from '../../types';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -44,6 +45,45 @@ const C = {
 
 const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 const OPENAI_API_KEY    = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
+
+// ── Chat history persistence ──────────────────────────────────────────────────
+const HISTORY_STORAGE_KEY = '@wyle:buddy_history';
+const HISTORY_RETENTION_DAYS = 7;   // keep 7 days of chat history
+const HISTORY_MAX_MESSAGES   = 150; // hard cap to prevent storage bloat
+
+async function loadHistory(): Promise<any[]> {
+  try {
+    const raw = await AsyncStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: any[] = JSON.parse(raw);
+    const cutoff = Date.now() - HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    // Filter out messages older than retention window, keep most recent cap
+    return parsed
+      .filter(m => new Date(m.timestamp).getTime() > cutoff)
+      .slice(-HISTORY_MAX_MESSAGES);
+  } catch {
+    return [];
+  }
+}
+
+async function saveHistory(messages: any[]): Promise<void> {
+  try {
+    // Serialize: keep only the fields we need (drop any base64 attachment data)
+    const toSave = messages.slice(-HISTORY_MAX_MESSAGES).map(m => ({
+      id:        m.id,
+      role:      m.role,
+      text:      m.text,
+      timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
+      // Save attachment metadata but NOT base64 content (too large)
+      attachment: m.attachment
+        ? { type: m.attachment.type, name: m.attachment.name }
+        : undefined,
+    }));
+    await AsyncStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(toSave));
+  } catch (e) {
+    console.warn('[Buddy] Failed to save history:', e);
+  }
+}
 
 // ── Detect whether a message needs task context ───────────────────────────────
 const TASK_KEYWORDS = [
@@ -476,11 +516,14 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
     visa: '✈️', driving_license: '🚗', other: '📄',
   };
 
-  const [messages, setMessages] = useState<Message[]>([{
+  const WELCOME_MSG: Message = {
     id: '0', role: 'buddy',
-    text: "Hey! I'm Buddy — your personal chief of staff. 👋\n\nYou have 2 urgent items today: your UAE visa expires in 8 days and your school fee of AED 14,000 is due today.\n\nTap 🎙️ to talk, or type below.",
+    text: "Hey! I'm Buddy — your personal chief of staff. 👋\n\nAsk me anything, or tap 🎙️ to talk.",
     timestamp: new Date(),
-  }]);
+  };
+
+  const [messages, setMessages]       = useState<Message[]>([WELCOME_MSG]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [input, setInput]             = useState('');
   const [loading, setLoading]         = useState(false);
   const [showQuick, setShowQuick]     = useState(true);
@@ -498,6 +541,23 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
 
   const scrollToEnd = () =>
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
+
+  // ── Load chat history from AsyncStorage on first mount ───────────────────
+  useEffect(() => {
+    (async () => {
+      const saved = await loadHistory();
+      if (saved.length > 0) {
+        // Restore timestamps as Date objects
+        const restored: Message[] = saved.map(m => ({
+          ...m,
+          timestamp: new Date(m.timestamp),
+        }));
+        setMessages(restored);
+        setShowQuick(false); // hide quick prompts if there's existing history
+      }
+      setHistoryLoaded(true);
+    })();
+  }, []);
 
   // ── Attachment helpers ──────────────────────────────────────────────────────
   const detectFileType = (mimeType: string, name: string): AttachmentType => {
@@ -879,7 +939,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     if (!pendingResolve) return;
     resolveObligation(pendingResolve.id);
     const msg = `✅ Done! "${pendingResolve.title}" is marked as completed and removed from your active list.`;
-    setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: msg, timestamp: new Date() }]);
+    setMessages(prev => { const u = [...prev, { id: uid(), role: 'buddy' as const, text: msg, timestamp: new Date() }]; saveHistory(u); return u; });
     speakText(`Done! ${pendingResolve.title} has been marked as completed.`);
     setPendingResolve(null);
     scrollToEnd();
@@ -1024,13 +1084,19 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       const responseText = textBlocks[textBlocks.length - 1]?.text ?? "Something went wrong. Try again?";
 
       const buddyMsg: Message = { id: uid(), role: 'buddy', text: responseText, timestamp: new Date() };
-      setMessages(prev => [...prev, buddyMsg]);
+      setMessages(prev => {
+        const updated = [...prev, buddyMsg];
+        saveHistory(updated);   // persist after every buddy reply
+        return updated;
+      });
       if (speakResponse) speakText(responseText);
     } catch (err: any) {
       console.warn('[Buddy] sendMessage error:', err?.message ?? err);
-      const fallback = "Sorry, I'm having a connection issue right now. Please check your internet connection and try again in a moment.";
+      // Show the actual API error in dev so it's easy to diagnose
+      const errDetail = __DEV__ ? `\n\n(${err?.message ?? 'unknown error'})` : '';
+      const fallback = `Sorry, I'm having a connection issue right now. Please check your internet connection and try again.${errDetail}`;
       setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: fallback, timestamp: new Date() }]);
-      if (speakResponse) speakText(fallback);
+      if (speakResponse) speakText("Sorry, I'm having a connection issue. Please try again.");
     } finally {
       setLoading(false);
       scrollToEnd();
