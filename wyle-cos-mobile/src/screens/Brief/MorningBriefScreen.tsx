@@ -1,16 +1,17 @@
 // src/screens/Brief/MorningBriefScreen.tsx
 // Morning brief / evening recap — dark palette, real-time from obligations store
 
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Animated, StatusBar,
+  Animated, StatusBar, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
-import { getBriefTimeOfDay } from '../../services/briefService';
+import { generateBrief, getBriefKey, getBriefTimeOfDay } from '../../services/briefService';
+import { getDayProgress, saveMorningSnapshot } from '../../services/snapshotService';
 import { BriefPriority, BriefCompletedItem } from '../../types';
 
 // ── Colours — unified dark palette ───────────────────────────────────────────
@@ -141,20 +142,59 @@ const cc = StyleSheet.create({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function MorningBriefScreen({ navigation }: { navigation: NavProp }) {
-  const nav       = navigation ?? { navigate: (_: any) => {}, goBack: () => {} };
-  const brief     = useAppStore(s => s.morningBrief);
-  const isEvening = getBriefTimeOfDay() === 'evening';
-  const fadeAnim  = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(28)).current;
+  const nav            = navigation ?? { navigate: (_: any) => {}, goBack: () => {} };
+  const brief          = useAppStore(s => s.morningBrief);
+  const setMorningBrief= useAppStore(s => s.setMorningBrief);
+  const setLastBriefKey= useAppStore(s => s.setLastBriefKey);
+  const obligations    = useAppStore(s => s.obligations);
+  const isEvening      = getBriefTimeOfDay() === 'evening';
+  const fadeAnim       = useRef(new Animated.Value(0)).current;
+  const slideAnim      = useRef(new Animated.Value(28)).current;
+  const [genLoading,   setGenLoading]   = useState(false);
+  const [genError,     setGenError]     = useState<string | null>(null);
+  const [genStatus,    setGenStatus]    = useState('Preparing your brief…');
 
+  // ── Auto-generate if brief is null on mount ───────────────────────────────
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim,  { toValue: 1, duration: 500, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true }),
-    ]).start();
+    if (!brief) triggerGenerate();
   }, []);
 
-  // ── Empty / loading state ─────────────────────────────────────────────────
+  async function triggerGenerate() {
+    setGenLoading(true);
+    setGenError(null);
+    try {
+      if (isEvening) {
+        setGenStatus('Reviewing today\'s progress…');
+        const dayProgress = await getDayProgress(obligations);
+        setGenStatus('Generating your evening recap…');
+        const result = await generateBrief(obligations, 99, dayProgress);
+        setMorningBrief(result);
+        setLastBriefKey(getBriefKey());
+      } else {
+        setGenStatus('Saving today\'s task snapshot…');
+        await saveMorningSnapshot(obligations);
+        setGenStatus('Generating your morning brief…');
+        const result = await generateBrief(obligations, 99);
+        setMorningBrief(result);
+        setLastBriefKey(getBriefKey());
+      }
+    } catch (e: any) {
+      setGenError(e?.message ?? 'Could not generate brief. Check your connection.');
+    } finally {
+      setGenLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (brief) {
+      Animated.parallel([
+        Animated.timing(fadeAnim,  { toValue: 1, duration: 500, useNativeDriver: true }),
+        Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [brief]);
+
+  // ── Loading state ─────────────────────────────────────────────────────────
   if (!brief) {
     return (
       <View style={s.container}>
@@ -171,14 +211,33 @@ export default function MorningBriefScreen({ navigation }: { navigation: NavProp
           </View>
         </SafeAreaView>
         <View style={s.emptyState}>
-          <Text style={s.emptyEmoji}>{isEvening ? '🌙' : '☀️'}</Text>
-          <Text style={s.emptyTitle}>Brief is being prepared</Text>
-          <Text style={s.emptySub}>
-            Head back to Home — Buddy will generate your brief automatically from your current obligations.
-          </Text>
-          <TouchableOpacity style={s.emptyBtn} onPress={() => nav.goBack()}>
-            <Text style={s.emptyBtnText}>← Go back</Text>
-          </TouchableOpacity>
+          {genLoading ? (
+            <>
+              <ActivityIndicator size="large" color={C.verdigris} style={{ marginBottom: 20 }} />
+              <Text style={s.emptyTitle}>{genStatus}</Text>
+              <Text style={s.emptySub}>Buddy is analysing your obligations…</Text>
+            </>
+          ) : genError ? (
+            <>
+              <Text style={s.emptyEmoji}>⚠️</Text>
+              <Text style={s.emptyTitle}>Could not generate brief</Text>
+              <Text style={s.emptySub}>{genError}</Text>
+              <TouchableOpacity style={s.emptyBtn} onPress={triggerGenerate}>
+                <Text style={s.emptyBtnText}>Try again</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={s.emptyEmoji}>{isEvening ? '🌙' : '☀️'}</Text>
+              <Text style={s.emptyTitle}>
+                {isEvening ? 'Your day at a glance' : "Your morning brief"}
+              </Text>
+              <Text style={s.emptySub}>Buddy will summarise your obligations and day progress.</Text>
+              <TouchableOpacity style={s.emptyBtn} onPress={triggerGenerate}>
+                <Text style={s.emptyBtnText}>Generate now</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
     );
