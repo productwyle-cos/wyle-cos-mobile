@@ -434,6 +434,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
   const [calendarQueryLabel, setCalendarQueryLabel] = useState('');
   const [savedCount, setSavedCount]         = useState(0);
   const [tipIndex, setTipIndex]             = useState(0);
+  const [apiError, setApiError]             = useState<'credits' | 'generic' | null>(null);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim  = useRef(new Animated.Value(0)).current;
@@ -554,7 +555,13 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || 'API error');
+      if (!res.ok) {
+        const msg: string = data.error?.message ?? '';
+        if (res.status === 402 || msg.toLowerCase().includes('credit') || msg.toLowerCase().includes('balance')) {
+          throw new Error('API_CREDITS_LOW');
+        }
+        throw new Error(msg || `API error ${res.status}`);
+      }
 
       const raw   = data.content?.[0]?.text ?? '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
@@ -640,8 +647,13 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
         Speech.speak(msg, { language: 'en-US', rate: 0.95 });
       }
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Brain dump parse error:', err);
+      if (err?.message === 'API_CREDITS_LOW') {
+        setApiError('credits');
+      } else {
+        setApiError('generic');
+      }
       setVoiceState('error');
     }
   };
@@ -670,6 +682,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
     setVoiceState('idle');
     setVoiceMode('task_creation');
     setSavedCount(0);
+    setApiError(null);
   };
 
   // ── Status label ────────────────────────────────────────────────────────────
@@ -682,7 +695,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       case 'done':          return voiceMode === 'calendar_query'
         ? `Found ${calendarEvents.length} ${calendarEvents.length === 1 ? 'meeting' : 'meetings'} — see below`
         : `Found ${parsed.length} ${parsed.length === 1 ? 'task' : 'tasks'} — review below`;
-      case 'error':         return 'Could not process. Try again.';
+      case 'error':         return apiError === 'credits' ? 'AI credits exhausted — top up to continue' : 'Could not process. Try again.';
     }
   };
 
@@ -901,6 +914,19 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
           </View>
         )}
 
+        {/* ── API Credits error banner ──────────────────────────────────── */}
+        {apiError === 'credits' && (
+          <View style={s.creditsErrorBlock}>
+            <Text style={s.creditsErrorIcon}>⚠️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.creditsErrorTitle}>AI credits exhausted</Text>
+              <Text style={s.creditsErrorSub}>
+                Top up your Anthropic API credits at console.anthropic.com → Plans &amp; Billing to restore Buddy and Voice Brain Dump.
+              </Text>
+            </View>
+          </View>
+        )}
+
         <View style={{ height: 40 }} />
       </ScrollView>
 
@@ -1013,6 +1039,11 @@ const s = StyleSheet.create({
   emptyExampleRow:{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   emptyExampleDot:{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.verdigris, marginTop: 6, flexShrink: 0 },
   emptyExampleText:{ color: C.textSec, fontSize: 12, lineHeight: 18, fontStyle: 'italic', flex: 1 },
+
+  creditsErrorBlock: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, backgroundColor: '#3A1A00', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: '#FF8C00', marginTop: 8 },
+  creditsErrorIcon:  { fontSize: 22 },
+  creditsErrorTitle: { color: '#FF8C00', fontSize: 14, fontWeight: '800', marginBottom: 4 },
+  creditsErrorSub:   { color: '#CC7000', fontSize: 12, lineHeight: 17 },
 
   savedBlock: { alignItems: 'center', paddingVertical: 32, gap: 12 },
   savedIcon:  { fontSize: 40, color: C.verdigris },
