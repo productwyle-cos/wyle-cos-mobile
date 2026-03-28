@@ -2,20 +2,21 @@
 // Fetches upcoming Google Calendar events using a stored OAuth access token.
 // Uses the Google Calendar API v3 (read-only, calendar.readonly scope).
 
-import { getAccessToken } from './googleAuthService';
+import { getAccessToken, getAllGoogleAccounts, getAccessTokenForEmail } from './googleAuthService';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface CalendarEvent {
-  id:          string;
-  title:       string;
-  description: string;
-  location:    string;
-  startTime:   Date;         // parsed from dateTime or date
-  endTime:     Date;
-  isAllDay:    boolean;
-  attendees:   string[];     // display names / emails
-  meetLink:    string;       // Google Meet URL if present
-  colorId:     string;
+  id:           string;
+  title:        string;
+  description:  string;
+  location:     string;
+  startTime:    Date;         // parsed from dateTime or date
+  endTime:      Date;
+  isAllDay:     boolean;
+  attendees:    string[];     // display names / emails
+  meetLink:     string;       // Google Meet URL if present
+  colorId:      string;
+  accountEmail?: string;      // which Google account this event belongs to
 }
 
 export interface ConflictPair {
@@ -30,9 +31,9 @@ export interface CalendarResult {
 }
 
 // ── Fetch upcoming events ─────────────────────────────────────────────────────
-export async function fetchUpcomingEvents(daysAhead = 7): Promise<CalendarResult> {
+export async function fetchUpcomingEvents(daysAhead = 7, accessToken?: string): Promise<CalendarResult> {
   try {
-    const token = await getAccessToken();
+    const token = accessToken ?? await getAccessToken();
     if (!token) {
       return { events: [], conflicts: [], error: 'Not connected to Google. Please connect your calendar first.' };
     }
@@ -107,6 +108,30 @@ export async function fetchUpcomingEvents(daysAhead = 7): Promise<CalendarResult
   } catch (err: any) {
     return { events: [], conflicts: [], error: err?.message ?? 'Unknown error' };
   }
+}
+
+// ── Fetch events from ALL connected Google accounts ───────────────────────────
+export async function fetchAllAccountsEvents(daysAhead = 7): Promise<CalendarEvent[]> {
+  const accounts = await getAllGoogleAccounts();
+  if (accounts.length === 0) return [];
+
+  const results = await Promise.allSettled(
+    accounts.map(async (email) => {
+      const token = await getAccessTokenForEmail(email);
+      if (!token) return [];
+      const result = await fetchUpcomingEvents(daysAhead, token);
+      // tag each event with the account email
+      return result.events.map(e => ({ ...e, accountEmail: email }));
+    })
+  );
+
+  // merge all fulfilled results, sort by start time
+  const all: CalendarEvent[] = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') all.push(...r.value);
+  }
+  all.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+  return all;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

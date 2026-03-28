@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Dimensions, Animated, StatusBar, ActivityIndicator, Platform,
+  Dimensions, Animated, StatusBar, ActivityIndicator, Platform, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -16,6 +16,7 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import {
   signInWithGoogle, isGoogleConnected, disconnectGoogle,
+  addGoogleAccount, disconnectGoogleAccount, getAllGoogleAccounts,
 } from '../../services/googleAuthService';
 import { runFullSignalScan } from '../../services/signalService';
 
@@ -226,6 +227,10 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
   const googleEmail        = useAppStore(st => st.googleEmail);
   const setGoogleConnected = useAppStore(st => st.setGoogleConnected);
   const setGoogleEmail     = useAppStore(st => st.setGoogleEmail);
+  const googleAccounts     = useAppStore(s => s.googleAccounts);
+  const addGAcc            = useAppStore(s => s.addGoogleAccount);
+  const removeGAcc         = useAppStore(s => s.removeGoogleAccount);
+  const setGAccounts       = useAppStore(s => s.setGoogleAccounts);
 
   // Local state
   const [userName,  setUserName]  = useState('Mohammed Al Rashid');
@@ -254,9 +259,13 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
       }
     });
 
-    // Check Google connection
-    isGoogleConnected().then(({ connected, email }) => {
-      if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
+    // Load all Google accounts (multi-account)
+    getAllGoogleAccounts().then(accounts => {
+      setGAccounts(accounts);
+      if (accounts.length > 0) {
+        setGoogleConnected(true);
+        setGoogleEmail(accounts[0]);
+      }
     });
 
     // Entrance animation
@@ -296,6 +305,34 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
     await disconnectGoogle();
     setGoogleConnected(false);
     setGoogleEmail('');
+    setGAccounts([]);
+  };
+
+  // ── Add another Google account ──────────────────────────────────────────────
+  const handleAddAccount = async () => {
+    const result = await addGoogleAccount();
+    if (result.success === true) {
+      addGAcc(result.email);
+    } else if (result.success === 'redirect') {
+      // web: page is redirecting, nothing to do
+    } else {
+      Alert.alert('Error', result.error);
+    }
+  };
+
+  // ── Disconnect a specific account ───────────────────────────────────────────
+  const handleDisconnectAccount = async (email: string) => {
+    Alert.alert(
+      'Disconnect account',
+      `Remove ${email} from Wyle?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Disconnect', style: 'destructive', onPress: async () => {
+          await disconnectGoogleAccount(email);
+          removeGAcc(email);
+        }},
+      ]
+    );
   };
 
   // ── Sign out ────────────────────────────────────────────────────────────────
@@ -427,37 +464,63 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
             </TouchableOpacity>
           </Animated.View>
 
+          {/* ── Google Accounts ─────────────────────────────────────────────── */}
+          <Animated.View style={{ opacity: fadeIn }}>
+            <Text style={s.sectionLabel}>GOOGLE ACCOUNTS</Text>
+            <View style={{ marginBottom: 22 }}>
+              {googleAccounts.length > 0 ? (
+                <>
+                  {googleAccounts.map((email, idx) => (
+                    <View key={email} style={s.accountItem}>
+                      <Text style={s.accountEmail} numberOfLines={1}>{email}</Text>
+                      {idx === 0 && (
+                        <View style={s.accountPrimaryBadge}>
+                          <Text style={s.accountPrimaryText}>Primary</Text>
+                        </View>
+                      )}
+                      <TouchableOpacity
+                        style={s.accountRemoveBtn}
+                        onPress={() => handleDisconnectAccount(email)}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={s.accountRemoveText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <TouchableOpacity
+                    style={s.addAccountBtn}
+                    onPress={handleAddAccount}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={s.addAccountText}>+ Add account</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={[s.accountRow, { backgroundColor: C.surface, borderRadius: 18, borderWidth: 1, borderColor: C.border }]}
+                  onPress={handleConnect}
+                  activeOpacity={0.75}
+                >
+                  <View style={[s.accountIconWrap, { backgroundColor: `${C.verdigris}18` }]}>
+                    {connecting
+                      ? <ActivityIndicator size="small" color={C.verdigris} />
+                      : <Text style={s.accountIconText}>📧</Text>
+                    }
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.accountRowLabel}>Connect Gmail & Calendar</Text>
+                    <Text style={s.accountRowSub}>Auto-detect obligations from inbox</Text>
+                  </View>
+                  <View style={[s.connStatusDot, { backgroundColor: C.textTer }]} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </Animated.View>
+
           {/* ── Account ────────────────────────────────────────────────────── */}
           <Animated.View style={{ opacity: fadeIn }}>
             <Text style={s.sectionLabel}>ACCOUNT</Text>
             <View style={s.accountList}>
-
-              {/* Google / Gmail connect */}
-              <TouchableOpacity
-                style={[s.accountRow, s.accountRowBorder]}
-                onPress={googleConnected ? handleDisconnect : handleConnect}
-                activeOpacity={0.75}
-              >
-                <View style={[s.accountIconWrap, { backgroundColor: `${C.verdigris}18` }]}>
-                  {connecting
-                    ? <ActivityIndicator size="small" color={C.verdigris} />
-                    : <Text style={s.accountIconText}>📧</Text>
-                  }
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.accountRowLabel}>
-                    {googleConnected ? 'Gmail Connected' : 'Connect Gmail & Calendar'}
-                  </Text>
-                  {googleConnected
-                    ? <Text style={s.accountRowSub}>{googleEmail}</Text>
-                    : <Text style={s.accountRowSub}>Auto-detect obligations from inbox</Text>
-                  }
-                </View>
-                <View style={[
-                  s.connStatusDot,
-                  { backgroundColor: googleConnected ? C.verdigris : C.textTer },
-                ]} />
-              </TouchableOpacity>
 
               {/* Manage Subscription */}
               <TouchableOpacity
@@ -663,6 +726,35 @@ const s = StyleSheet.create({
   accountRowLabel:  { color: C.white, fontSize: 15, fontWeight: '600' },
   accountRowSub:    { color: C.textSec, fontSize: 11, marginTop: 2 },
   connStatusDot:    { width: 8, height: 8, borderRadius: 4 },
+
+  // ── Multi-account Google UI
+  accountItem: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#1E1E1E', borderRadius: 12,
+    padding: 12, marginBottom: 8,
+    borderWidth: 1, borderColor: '#2A2A2A',
+  },
+  accountEmail: { flex: 1, color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  accountPrimaryBadge: {
+    backgroundColor: '#1B998B20', borderRadius: 6,
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: 1, borderColor: '#1B998B40', marginRight: 8,
+  },
+  accountPrimaryText: { color: '#1B998B', fontSize: 10, fontWeight: '700' },
+  accountRemoveBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#FF3B3015', borderWidth: 1, borderColor: '#FF3B3030',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  accountRemoveText: { color: '#FF3B30', fontSize: 12, fontWeight: '700' },
+  addAccountBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, padding: 12, borderRadius: 12,
+    backgroundColor: '#1E1E1E', borderWidth: 1,
+    borderColor: '#2A2A2A', borderStyle: 'dashed',
+    marginTop: 4,
+  },
+  addAccountText: { color: '#9A9A9A', fontSize: 13, fontWeight: '600' },
 
   // ── Version
   versionText: {
