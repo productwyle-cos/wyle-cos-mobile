@@ -120,8 +120,13 @@ async function startMicrosoftRedirect(mode: 'sign_in' | 'add_account' = 'sign_in
   const redirectUri = getMsRedirectUri();
   const discovery  = getDiscovery();
 
-  if (!clientId) {
+  console.log('[OutlookAuth] clientId →', clientId ? clientId.slice(0, 8) + '...' : 'MISSING');
+  console.log('[OutlookAuth] redirectUri →', redirectUri);
+  console.log('[OutlookAuth] authEndpoint →', discovery.authorizationEndpoint);
+
+  if (!clientId || clientId === 'YOUR_AZURE_CLIENT_ID_HERE') {
     console.error('[OutlookAuth] EXPO_PUBLIC_MICROSOFT_CLIENT_ID not set in .env.local');
+    alert('Microsoft Client ID not configured.\n\nAdd EXPO_PUBLIC_MICROSOFT_CLIENT_ID=your-client-id to .env.local in your Codespace, then restart Expo.');
     return;
   }
 

@@ -364,10 +364,16 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
   // ── Connect Microsoft Outlook ────────────────────────────────────────────────
   const handleConnectOutlook = async () => {
     setConnectingOutlook(true);
-    const result = await signInWithMicrosoft();
-    if (result.success === 'redirect') return; // page is redirecting
-    if (result.success === true) {
-      addOAcc(result.email);
+    try {
+      const result = await signInWithMicrosoft();
+      if (result.success === 'redirect') return; // page is redirecting away — keep spinner
+      if (result.success === true) {
+        addOAcc(result.email);
+      } else {
+        Alert.alert('Connection Failed', result.error ?? 'Could not connect Microsoft account.');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Unexpected error connecting Microsoft account.');
     }
     setConnectingOutlook(false);
   };
