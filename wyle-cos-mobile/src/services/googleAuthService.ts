@@ -182,6 +182,8 @@ async function startWebRedirect(mode: 'sign_in' | 'add_account' = 'sign_in'): Pr
   localStorage.setItem(WEB_PKCE_KEYS.REDIRECT_URI, redirectUri);
   localStorage.setItem(WEB_PKCE_KEYS.CLIENT_ID,    clientId);
   localStorage.setItem(WEB_PKCE_KEYS.MODE,         mode);
+  // Mark as Google flow so Microsoft callback handler skips it
+  localStorage.setItem('wyle_oauth_provider', 'google');
 
   const prompt = mode === 'add_account' ? 'select_account' : 'consent';
 
@@ -206,6 +208,10 @@ async function startWebRedirect(mode: 'sign_in' | 'add_account' = 'sign_in'): Pr
 //         If not a callback, returns null (no-op).
 export async function handleGoogleOAuthCallback(): Promise<GoogleAuthResult | null> {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+
+  // If a Microsoft OAuth flow is in progress, skip this handler
+  const oauthProvider = localStorage.getItem('wyle_oauth_provider');
+  if (oauthProvider === 'microsoft') return null;
 
   const urlParams = new URLSearchParams(window.location.search);
   const code  = urlParams.get('code');

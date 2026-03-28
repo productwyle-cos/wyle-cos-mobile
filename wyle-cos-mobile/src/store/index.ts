@@ -47,6 +47,12 @@ interface AppState {
   removeGoogleAccount: (email: string) => void;
   setGoogleAccounts: (accounts: string[]) => void;
 
+  // Microsoft Outlook
+  outlookAccounts: string[];
+  addOutlookAccount: (email: string) => void;
+  removeOutlookAccount: (email: string) => void;
+  setOutlookAccounts: (accounts: string[]) => void;
+
   // Insights
   insights: InsightsData | null;
   setInsights: (data: InsightsData) => void;
@@ -71,6 +77,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   googleConnected: false,
   googleEmail: '',
   googleAccounts: [],
+  outlookAccounts: [],
   isLoading: false,
 
   setAuth: async (token, user) => {
@@ -141,4 +148,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     googleConnected: googleAccounts.length > 0,
     googleEmail: googleAccounts[0] ?? state.googleEmail,
   })),
+
+  addOutlookAccount: (email) => set(state => ({
+    outlookAccounts: [...new Set([...state.outlookAccounts, email])],
+  })),
+
+  removeOutlookAccount: (email) => set(state => ({
+    outlookAccounts: state.outlookAccounts.filter(e => e !== email),
+  })),
+
+  setOutlookAccounts: (outlookAccounts) => set({ outlookAccounts }),
 }));

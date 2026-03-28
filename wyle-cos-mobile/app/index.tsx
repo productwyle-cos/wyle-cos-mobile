@@ -48,6 +48,38 @@ export default function AppEntry() {
       // to show. If we skip this step the user ends up back at the splash
       // screen with nothing saved.
       if (Platform.OS === 'web') {
+        // ── Handle Microsoft OAuth callback ─────────────────────────────────
+        try {
+          const { handleOutlookOAuthCallback } =
+            await import('../src/services/outlookAuthService');
+          const msCb = await handleOutlookOAuthCallback();
+          if (msCb !== null) {
+            // This page load is a Microsoft OAuth callback
+            if (msCb.success === true) {
+              const existingToken = await AsyncStorage.getItem('wyle_token');
+              if (!existingToken) {
+                await AsyncStorage.setItem('wyle_token', 'microsoft_auth_token');
+                await AsyncStorage.setItem('wyle_user', JSON.stringify({
+                  _id:                'ms_' + msCb.email.replace(/[^a-z0-9]/gi, ''),
+                  name:               msCb.email.split('@')[0] || 'Wyle User',
+                  email:              msCb.email,
+                  onboardingComplete: true,
+                }));
+                setScreen('preparation');
+              } else {
+                setScreen('home');
+              }
+            } else {
+              setScreen(await AsyncStorage.getItem('wyle_token') ? 'home' : 'login');
+            }
+            setLoading(false);
+            return;
+          }
+        } catch (e) {
+          console.warn('[App] Microsoft OAuth callback error:', e);
+        }
+
+        // ── Handle Google OAuth callback ─────────────────────────────────────
         try {
           const { handleGoogleOAuthCallback } =
             await import('../src/services/googleAuthService');

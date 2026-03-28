@@ -3,6 +3,7 @@
 // Uses the Google Calendar API v3 (read-only, calendar.readonly scope).
 
 import { getAccessToken, getAllGoogleAccounts, getAccessTokenForEmail } from './googleAuthService';
+import { fetchOutlookEventsForDateRange } from './outlookCalendarService';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface CalendarEvent {
@@ -112,24 +113,29 @@ export async function fetchUpcomingEvents(daysAhead = 7, accessToken?: string): 
 
 // ── Fetch events from ALL connected Google accounts ───────────────────────────
 export async function fetchAllAccountsEvents(daysAhead = 7): Promise<CalendarEvent[]> {
-  const accounts = await getAllGoogleAccounts();
-  if (accounts.length === 0) return [];
+  const now   = new Date();
+  const end   = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
 
-  const results = await Promise.allSettled(
-    accounts.map(async (email) => {
+  // Google accounts
+  const googleAccounts = await getAllGoogleAccounts();
+  const googleResults = await Promise.allSettled(
+    googleAccounts.map(async (email) => {
       const token = await getAccessTokenForEmail(email);
       if (!token) return [];
       const result = await fetchUpcomingEvents(daysAhead, token);
-      // tag each event with the account email
       return result.events.map(e => ({ ...e, accountEmail: email }));
     })
   );
 
-  // merge all fulfilled results, sort by start time
+  // Outlook / Microsoft accounts
+  const outlookEvents = await fetchOutlookEventsForDateRange(now, end).catch(() => []);
+
+  // Merge all
   const all: CalendarEvent[] = [];
-  for (const r of results) {
+  for (const r of googleResults) {
     if (r.status === 'fulfilled') all.push(...r.value);
   }
+  all.push(...outlookEvents);
   all.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   return all;
 }
@@ -214,6 +220,11 @@ export async function fetchEventsForDateRange(
 
     const all: CalendarEvent[] = [];
     for (const r of settled) { if (r.status === 'fulfilled') all.push(...r.value); }
+
+    // Also fetch Outlook events for the same range
+    const outlookEvents = await fetchOutlookEventsForDateRange(startDate, endDate).catch(() => []);
+    all.push(...outlookEvents);
+
     all.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
     return { events: all, conflicts: [] };
   } catch (err: any) {
