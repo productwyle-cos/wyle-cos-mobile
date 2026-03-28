@@ -16,7 +16,7 @@ import { useAppStore } from '../../store';
 import { VoiceService } from '../../services/voiceService';
 import { UIObligation } from '../../types';
 import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate, detectDayOverload, OVERLOAD_THRESHOLD, cancelCalendarEvent, sendGmailEmail } from '../../services/calendarService';
-import { getAccessToken } from '../../services/googleAuthService';
+import { getAccessToken, getAccessTokenForEmail } from '../../services/googleAuthService';
 
 const { width } = Dimensions.get('window');
 
@@ -1068,7 +1068,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
   // Cancellation note modal state (hoisted from BuddyResolutionCard to avoid nested Modals on web)
   const [cancelNoteModal, setCancelNoteModal] = useState(false);
   const [cancelNoteText, setCancelNoteText]   = useState('');
-  const [pendingCancelEvent, setPendingCancelEvent] = useState<{id: string; title: string; time: string; attendeeEmails: string[]; newItem: UIObligation | null} | null>(null);
+  const [pendingCancelEvent, setPendingCancelEvent] = useState<{id: string; title: string; time: string; attendeeEmails: string[]; accountEmail?: string; newItem: UIObligation | null} | null>(null);
   const [cancelSending, setCancelSending]     = useState(false);
 
   const openCancelNoteModal = (ev: CalendarEvent, itemTitle: string, newItem?: UIObligation) => {
@@ -1082,6 +1082,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
       title: ev.title,
       time: timeStr,
       attendeeEmails: ev.attendees || [],
+      accountEmail: ev.accountEmail,
       newItem: newItem ?? null,
     });
     setCancelNoteText(autoMessage);
@@ -1093,11 +1094,14 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
     console.log('[CancelNote] Starting cancellation for:', pendingCancelEvent?.title, 'attendees:', pendingCancelEvent?.attendeeEmails);
     setCancelSending(true);
     try {
-      const token = await getAccessToken();
+      // Use the account that owns the event; fall back to primary
+      const token = pendingCancelEvent.accountEmail
+        ? (await getAccessTokenForEmail(pendingCancelEvent.accountEmail) ?? await getAccessToken())
+        : await getAccessToken();
       if (!token) throw new Error('No access token');
 
       // Cancel the calendar event
-      const result = await cancelCalendarEvent(pendingCancelEvent.id, token);
+      const result = await cancelCalendarEvent(pendingCancelEvent.id, token, pendingCancelEvent.accountEmail);
       if (!result.ok) throw new Error(result.error ?? 'Could not cancel meeting.');
 
       // Send email to each attendee

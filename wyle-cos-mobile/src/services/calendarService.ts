@@ -168,54 +168,54 @@ export async function fetchEventsForDateRange(
   endDate:   Date,
 ): Promise<CalendarResult> {
   try {
-    const token = await getAccessToken();
-    if (!token) {
+    const accounts = await getAllGoogleAccounts();
+    if (accounts.length === 0) {
       return { events: [], conflicts: [], error: 'Not connected to Google Calendar.' };
     }
 
-    const params = new URLSearchParams({
-      calendarId:   'primary',
-      timeMin:       startDate.toISOString(),
-      timeMax:       endDate.toISOString(),
-      singleEvents: 'true',
-      orderBy:      'startTime',
-      maxResults:   '50',
-    });
+    // fetch from ALL accounts in parallel
+    const settled = await Promise.allSettled(
+      accounts.map(async (email) => {
+        const token = await getAccessTokenForEmail(email);
+        if (!token) return [];
 
-    const res = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
-      { headers: { Authorization: `Bearer ${token}` } },
+        const params = new URLSearchParams({
+          calendarId:   'primary',
+          timeMin:      startDate.toISOString(),
+          timeMax:      endDate.toISOString(),
+          singleEvents: 'true',
+          orderBy:      'startTime',
+          maxResults:   '50',
+        });
+
+        const res = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) return [];
+
+        const data = await res.json();
+        return (data.items ?? []).map((item: any) => {
+          const isAllDay = !!item.start?.date && !item.start?.dateTime;
+          const startRaw = item.start?.dateTime ?? item.start?.date ?? startDate.toISOString();
+          const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? endDate.toISOString();
+          return {
+            id: item.id ?? '', title: item.summary ?? '(No title)',
+            description: item.description ?? '', location: item.location ?? '',
+            startTime: new Date(startRaw), endTime: new Date(endRaw), isAllDay,
+            attendees: (item.attendees ?? []).map((a: any) => a.email ?? a.displayName ?? '').filter(Boolean),
+            meetLink: item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri ?? item.hangoutLink ?? '',
+            colorId: item.colorId ?? '',
+            accountEmail: email,
+          } as CalendarEvent;
+        });
+      })
     );
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      return { events: [], conflicts: [], error: err?.error?.message ?? `API error ${res.status}` };
-    }
-
-    const data  = await res.json();
-    const items: any[] = data.items ?? [];
-
-    const events: CalendarEvent[] = items.map(item => {
-      const isAllDay = !!item.start?.date && !item.start?.dateTime;
-      const startRaw = item.start?.dateTime ?? item.start?.date ?? startDate.toISOString();
-      const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? endDate.toISOString();
-      return {
-        id:          item.id ?? '',
-        title:       item.summary ?? '(No title)',
-        description: item.description ?? '',
-        location:    item.location ?? '',
-        startTime:   new Date(startRaw),
-        endTime:     new Date(endRaw),
-        isAllDay,
-        attendees:   (item.attendees ?? []).map((a: any) => a.email ?? a.displayName ?? '').filter(Boolean),
-        meetLink:
-          item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
-          ?? item.hangoutLink ?? '',
-        colorId: item.colorId ?? '',
-      };
-    });
-
-    return { events, conflicts: [] };
+    const all: CalendarEvent[] = [];
+    for (const r of settled) { if (r.status === 'fulfilled') all.push(...r.value); }
+    all.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+    return { events: all, conflicts: [] };
   } catch (err: any) {
     return { events: [], conflicts: [], error: err?.message ?? 'Unknown error' };
   }
@@ -239,54 +239,69 @@ export interface DayOverloadResult {
 export async function detectDayOverload(date: Date): Promise<DayOverloadResult> {
   const empty: DayOverloadResult = { isOverloaded: false, count: 0, events: [], threshold: OVERLOAD_THRESHOLD };
   try {
-    const token = await getAccessToken();
-    if (!token) return empty;
+    const accounts = await getAllGoogleAccounts();
+    if (accounts.length === 0) return empty;
 
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const params = new URLSearchParams({
-      calendarId:   'primary',
-      timeMin:      startOfDay.toISOString(),
-      timeMax:      endOfDay.toISOString(),
-      singleEvents: 'true',
-      orderBy:      'startTime',
-      maxResults:   '50',
-    });
+    const settled = await Promise.allSettled(
+      accounts.map(async (email) => {
+        const token = await getAccessTokenForEmail(email);
+        if (!token) return [] as CalendarEvent[];
 
-    const res = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
-      { headers: { Authorization: `Bearer ${token}` } },
+        const params = new URLSearchParams({
+          calendarId:   'primary',
+          timeMin:      startOfDay.toISOString(),
+          timeMax:      endOfDay.toISOString(),
+          singleEvents: 'true',
+          orderBy:      'startTime',
+          maxResults:   '50',
+        });
+
+        const res = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) return [] as CalendarEvent[];
+
+        const data  = await res.json();
+        const items: any[] = data.items ?? [];
+
+        return items.map(item => {
+          const isAllDay = !!item.start?.date && !item.start?.dateTime;
+          const startRaw = item.start?.dateTime ?? item.start?.date ?? startOfDay.toISOString();
+          const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? endOfDay.toISOString();
+          return {
+            id:          item.id ?? '',
+            title:       item.summary ?? '(No title)',
+            description: item.description ?? '',
+            location:    item.location ?? '',
+            startTime:   new Date(startRaw),
+            endTime:     new Date(endRaw),
+            isAllDay,
+            attendees:   (item.attendees ?? []).map((a: any) => a.email ?? a.displayName ?? '').filter(Boolean),
+            meetLink:
+              item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
+              ?? item.hangoutLink ?? '',
+            colorId:      item.colorId ?? '',
+            accountEmail: email,
+          } as CalendarEvent;
+        });
+      })
     );
-    if (!res.ok) return empty;
 
-    const data  = await res.json();
-    const items: any[] = data.items ?? [];
+    const all: CalendarEvent[] = [];
+    for (const r of settled) { if (r.status === 'fulfilled') all.push(...r.value); }
 
-    const events: CalendarEvent[] = items.map(item => {
-      const isAllDay = !!item.start?.date && !item.start?.dateTime;
-      const startRaw = item.start?.dateTime ?? item.start?.date ?? startOfDay.toISOString();
-      const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? endOfDay.toISOString();
-      return {
-        id:          item.id ?? '',
-        title:       item.summary ?? '(No title)',
-        description: item.description ?? '',
-        location:    item.location ?? '',
-        startTime:   new Date(startRaw),
-        endTime:     new Date(endRaw),
-        isAllDay,
-        attendees:   (item.attendees ?? []).map((a: any) => a.email ?? a.displayName ?? '').filter(Boolean),
-        meetLink:
-          item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
-          ?? item.hangoutLink ?? '',
-        colorId: item.colorId ?? '',
-      };
-    });
+    // Deduplicate by event id (same event may appear across accounts)
+    const seen = new Set<string>();
+    const unique = all.filter(ev => { if (seen.has(ev.id)) return false; seen.add(ev.id); return true; });
 
     // Only timed (non-all-day) meetings count toward overload
-    const meetings   = events.filter(ev => !ev.isAllDay);
+    const meetings   = unique.filter(ev => !ev.isAllDay);
     const isOverloaded = meetings.length >= OVERLOAD_THRESHOLD;
     return { isOverloaded, count: meetings.length, events: meetings, threshold: OVERLOAD_THRESHOLD };
   } catch {
@@ -300,9 +315,21 @@ export async function detectDayOverload(date: Date): Promise<DayOverloadResult> 
  * Google automatically sends cancellation emails to all attendees.
  * Requires the calendar.events scope.
  */
-export async function cancelCalendarEvent(eventId: string, accessToken?: string): Promise<{ ok: boolean; error?: string }> {
+export async function cancelCalendarEvent(
+  eventId:      string,
+  accessToken?: string,
+  accountEmail?: string,
+): Promise<{ ok: boolean; error?: string }> {
   try {
-    const token = accessToken ?? await getAccessToken();
+    let token = accessToken;
+    if (!token) {
+      // If we know which account owns the event, fetch that account's token
+      if (accountEmail) {
+        token = await getAccessTokenForEmail(accountEmail) ?? undefined;
+      }
+      // Fall back to primary account token
+      if (!token) token = await getAccessToken() ?? undefined;
+    }
     if (!token) return { ok: false, error: 'Not connected to Google Calendar.' };
 
     const res = await fetch(
@@ -375,52 +402,66 @@ export async function checkTimeConflicts(
   proposedEnd:   Date,
 ): Promise<CalendarEvent[]> {
   try {
-    const token = await getAccessToken();
-    if (!token) return [];
+    const accounts = await getAllGoogleAccounts();
+    if (accounts.length === 0) return [];
 
-    // Fetch events in a window around the proposed slot
-    const params = new URLSearchParams({
-      calendarId:   'primary',
-      timeMin:      proposedStart.toISOString(),
-      timeMax:      proposedEnd.toISOString(),
-      singleEvents: 'true',
-      orderBy:      'startTime',
-      maxResults:   '10',
-    });
+    const settled = await Promise.allSettled(
+      accounts.map(async (email) => {
+        const token = await getAccessTokenForEmail(email);
+        if (!token) return [] as CalendarEvent[];
 
-    const res = await fetch(
-      `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
-      { headers: { Authorization: `Bearer ${token}` } },
+        const params = new URLSearchParams({
+          calendarId:   'primary',
+          timeMin:      proposedStart.toISOString(),
+          timeMax:      proposedEnd.toISOString(),
+          singleEvents: 'true',
+          orderBy:      'startTime',
+          maxResults:   '10',
+        });
+
+        const res = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) return [] as CalendarEvent[];
+
+        const data  = await res.json();
+        const items: any[] = data.items ?? [];
+
+        return items.map(item => {
+          const isAllDay = !!item.start?.date && !item.start?.dateTime;
+          const startRaw = item.start?.dateTime ?? item.start?.date ?? proposedStart.toISOString();
+          const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? proposedEnd.toISOString();
+          return {
+            id:          item.id ?? '',
+            title:       item.summary ?? '(No title)',
+            description: item.description ?? '',
+            location:    item.location ?? '',
+            startTime:   new Date(startRaw),
+            endTime:     new Date(endRaw),
+            isAllDay,
+            attendees:   (item.attendees ?? [])
+              .map((a: any) => a.email ?? a.displayName ?? '')
+              .filter(Boolean),
+            meetLink:
+              item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
+              ?? item.hangoutLink ?? '',
+            colorId:      item.colorId ?? '',
+            accountEmail: email,
+          } as CalendarEvent;
+        });
+      })
     );
-    if (!res.ok) return [];
 
-    const data  = await res.json();
-    const items: any[] = data.items ?? [];
+    const all: CalendarEvent[] = [];
+    for (const r of settled) { if (r.status === 'fulfilled') all.push(...r.value); }
 
-    const events: CalendarEvent[] = items.map(item => {
-      const isAllDay = !!item.start?.date && !item.start?.dateTime;
-      const startRaw = item.start?.dateTime ?? item.start?.date ?? proposedStart.toISOString();
-      const endRaw   = item.end?.dateTime   ?? item.end?.date   ?? proposedEnd.toISOString();
-      return {
-        id:          item.id ?? '',
-        title:       item.summary ?? '(No title)',
-        description: item.description ?? '',
-        location:    item.location ?? '',
-        startTime:   new Date(startRaw),
-        endTime:     new Date(endRaw),
-        isAllDay,
-        attendees:   (item.attendees ?? [])
-          .map((a: any) => a.email ?? a.displayName ?? '')
-          .filter(Boolean),
-        meetLink:
-          item.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri
-          ?? item.hangoutLink ?? '',
-        colorId: item.colorId ?? '',
-      };
-    });
+    // Deduplicate by event id
+    const seen = new Set<string>();
+    const unique = all.filter(ev => { if (seen.has(ev.id)) return false; seen.add(ev.id); return true; });
 
     // Only return events that actually overlap (not just touch boundaries)
-    return events.filter(ev => {
+    return unique.filter(ev => {
       if (ev.isAllDay) return false;
       return ev.startTime < proposedEnd && proposedStart < ev.endTime;
     });

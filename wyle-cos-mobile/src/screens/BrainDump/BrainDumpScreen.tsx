@@ -222,7 +222,7 @@ function ObligationPreview({
   item: ParsedObligation;
   conflictEvents?: CalendarEvent[];
   overload?: OverloadInfo | null;
-  onCancelConflict?: (eventId: string, title: string) => void;
+  onCancelConflict?: (eventId: string, title: string, accountEmail?: string) => void;
 }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
@@ -309,7 +309,7 @@ function ObligationPreview({
             <TouchableOpacity
               key={ev.id}
               style={op.cancelReplaceBtn}
-              onPress={() => onCancelConflict(ev.id, ev.title)}
+              onPress={() => onCancelConflict(ev.id, ev.title, ev.accountEmail)}
               activeOpacity={0.8}
             >
               <Text style={op.cancelReplaceBtnText}>
@@ -428,7 +428,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
   const fadeAnim  = useRef(new Animated.Value(0)).current;
 
   // ── Cancel a conflicting calendar event ────────────────────────────────────
-  const handleCancelConflict = async (eventId: string, title: string) => {
+  const handleCancelConflict = async (eventId: string, title: string, accountEmail?: string) => {
     Alert.alert(
       'Cancel Meeting?',
       `Cancel "${title}" and notify all attendees?`,
@@ -438,7 +438,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
           text: 'Yes, Cancel & Notify',
           style: 'destructive',
           onPress: async () => {
-            const result = await cancelCalendarEvent(eventId);
+            const result = await cancelCalendarEvent(eventId, undefined, accountEmail);
             if (result.ok) {
               Alert.alert('Done', `"${title}" has been cancelled. Attendees will be notified by Google.`);
               // Remove from conflicts map so the banner disappears
