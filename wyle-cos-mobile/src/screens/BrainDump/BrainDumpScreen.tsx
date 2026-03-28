@@ -114,6 +114,12 @@ CRITICAL RULES:
 1. daysUntil must be calculated from ${todayISO}. Do NOT use any other reference date.
 2. "coming Saturday" or "this Saturday" = look up Saturday in the UPCOMING DATES table above.
 3. Always include scheduledTime when a time of day is mentioned (even with relative dates like "Saturday at 9:30 AM").
+4. IMPORTANT — Booking/Action requests ARE tasks: When the user says "book", "schedule", "arrange", "set up", "make an appointment", "get me an appointment", "can you book", "buddy book", "please book" — these are TO-DO ITEMS to extract, not commands for you to execute. You cannot actually book anything; you record the task so the user remembers to do it.
+   Examples:
+   - "book a hospital appointment at 6 PM today" → task {title: "Hospital Appointment", type: "appointment", daysUntil: 0, scheduledTime: "${todayISO}T18:00:00"}
+   - "can you book a restaurant for Saturday evening" → task {title: "Book Restaurant", type: "task", daysUntil: X (Saturday)}
+   - "hey buddy schedule a car service next week" → task {title: "Car Service", type: "task", daysUntil: 7}
+5. NEVER return an empty items array for a booking, scheduling, or action request. Always extract it as a task.
 
 Example — if today is 2026-03-19 (Thursday) and user says "hospital appointment coming Saturday at 9:30 AM":
 Saturday = 2026-03-21, daysUntil = 2, scheduledTime = "2026-03-21T09:30:00"
@@ -151,6 +157,11 @@ INTENT: "calendar_query" — user is ASKING about their schedule, meetings, or e
   - "list my meetings" / "show my meetings"
   - "what are my meetings" / "any meetings today"
   - "buddy can you tell me what are the meeting schedule" → calendar_query for today
+  - "what are all the meetings" / "what meetings are there" / "meetings scheduled for me"
+  - "meetings others scheduled for me" / "meetings booked for me" / "what's on my agenda"
+  - "what do I have today" / "what's on today" / "am I free on..."
+  - "how does my day look" / "how is my schedule looking"
+  KEY RULE: Any phrase asking about existing calendar events = calendar_query. Do NOT mix this with booking/scheduling new tasks.
   If the period is unclear or not mentioned, default to today's date range.
   Return: {"intent": "calendar_query", "start": "<ISO datetime>", "end": "<ISO datetime>", "label": "<human period>"}
   Where:
@@ -785,57 +796,77 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
         )}
 
         {/* ── Empty state: 0 tasks found ─────────────────────────────────── */}
-        {voiceMode === 'task_creation' && voiceState === 'done' && parsed.length === 0 && (
-          <View style={s.emptyDumpBlock}>
-            {/^(what|who|where|when|how|can you|tell me|show me|is there|do i|are there|could you|would you|buddy)/i.test(transcript.trim()) ? (
-              /* Looks like a question — redirect to Buddy */
-              <>
-                <Text style={s.emptyDumpIcon}>💬</Text>
-                <Text style={s.emptyDumpTitle}>That sounds like a question</Text>
-                <Text style={s.emptyDumpSub}>
-                  Voice Brain Dump creates tasks from what you say.{'\n'}
-                  For questions like schedules or news, ask Buddy instead.
-                </Text>
-                <TouchableOpacity
-                  style={s.emptyDumpBuddyBtn}
-                  onPress={() => nav.navigate('buddy')}
-                  activeOpacity={0.85}
-                >
-                  <Text style={s.emptyDumpBuddyText}>Ask Buddy instead  →</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
-                  <Text style={s.discardBtnText}>Try a task instead</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              /* Genuinely no tasks found — show examples */
-              <>
-                <Text style={s.emptyDumpIcon}>🤔</Text>
-                <Text style={s.emptyDumpTitle}>No tasks found</Text>
-                <Text style={s.emptyDumpSub}>
-                  Buddy couldn't find any obligations in what you said.{'\n'}
-                  Try speaking like these examples:
-                </Text>
-                <View style={s.emptyExamples}>
-                  {[
-                    '"Pay school fee of AED 14,000 by end of month"',
-                    '"Renew Emirates ID, expires in 5 days"',
-                    '"Car registration due next Saturday, AED 450"',
-                    '"Doctor appointment this Thursday at 10 AM"',
-                  ].map((ex, i) => (
-                    <View key={i} style={s.emptyExampleRow}>
-                      <View style={s.emptyExampleDot} />
-                      <Text style={s.emptyExampleText}>{ex}</Text>
-                    </View>
-                  ))}
-                </View>
-                <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
-                  <Text style={s.discardBtnText}>Try again</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
+        {voiceMode === 'task_creation' && voiceState === 'done' && parsed.length === 0 && (() => {
+          const t = transcript.trim().toLowerCase();
+          // detect question / calendar query phrasing
+          const isQuestion = /^(hey\s+)?(what|who|where|when|how|can you|tell me|show me|is there|do i|are there|could you|would you|buddy)/i.test(transcript.trim());
+          const isMeetingQuery = /(meeting|meetings|schedule|calendar|agenda|events?|booked for me|scheduled for me)/i.test(t) && /(what|when|do i have|show|tell|list|any|all)/i.test(t);
+          return (
+            <View style={s.emptyDumpBlock}>
+              {isMeetingQuery ? (
+                /* Looks like a calendar/meeting query — run it as calendar query */
+                <>
+                  <Text style={s.emptyDumpIcon}>📅</Text>
+                  <Text style={s.emptyDumpTitle}>Looking for meetings?</Text>
+                  <Text style={s.emptyDumpSub}>
+                    Try asking about your calendar directly:{'\n'}
+                    "What meetings do I have today?" or{'\n'}
+                    "Show me my schedule for this week"
+                  </Text>
+                  <TouchableOpacity style={s.emptyDumpBuddyBtn} onPress={handleDiscard} activeOpacity={0.85}>
+                    <Text style={s.emptyDumpBuddyText}>Try again  →</Text>
+                  </TouchableOpacity>
+                </>
+              ) : isQuestion ? (
+                /* Looks like a general question — redirect to Buddy */
+                <>
+                  <Text style={s.emptyDumpIcon}>💬</Text>
+                  <Text style={s.emptyDumpTitle}>That sounds like a question</Text>
+                  <Text style={s.emptyDumpSub}>
+                    Voice Brain Dump creates tasks from what you say.{'\n'}
+                    For questions like schedules or news, ask Buddy instead.
+                  </Text>
+                  <TouchableOpacity
+                    style={s.emptyDumpBuddyBtn}
+                    onPress={() => nav.navigate('buddy')}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={s.emptyDumpBuddyText}>Ask Buddy instead  →</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
+                    <Text style={s.discardBtnText}>Try a task instead</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                /* Genuinely no tasks found — show examples */
+                <>
+                  <Text style={s.emptyDumpIcon}>🤔</Text>
+                  <Text style={s.emptyDumpTitle}>No tasks found</Text>
+                  <Text style={s.emptyDumpSub}>
+                    Buddy couldn't find any obligations in what you said.{'\n'}
+                    Try speaking like these examples:
+                  </Text>
+                  <View style={s.emptyExamples}>
+                    {[
+                      '"Pay school fee of AED 14,000 by end of month"',
+                      '"Renew Emirates ID, expires in 5 days"',
+                      '"Book hospital appointment at 6 PM today"',
+                      '"Car registration due next Saturday, AED 450"',
+                    ].map((ex, i) => (
+                      <View key={i} style={s.emptyExampleRow}>
+                        <View style={s.emptyExampleDot} />
+                        <Text style={s.emptyExampleText}>{ex}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
+                    <Text style={s.discardBtnText}>Try again</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          );
+        })()}
 
         {/* Calendar query results */}
         {voiceMode === 'calendar_query' && voiceState === 'done' && (
