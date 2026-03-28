@@ -144,11 +144,14 @@ INTENT: "tasks" — user is creating/adding tasks, obligations, reminders
 INTENT: "calendar_query" — user is ASKING about their schedule, meetings, or events
   Triggered by phrases like:
   - "what meetings do I have next week / tomorrow / on Saturday"
-  - "tell me my schedule for..."
+  - "tell me my schedule for..." / "what is my schedule" / "meeting schedule"
   - "do I have anything on Monday"
   - "show me meetings on March 21st"
-  - "what's on my calendar"
-  - "list my meetings"
+  - "what's on my calendar" / "what's on my schedule"
+  - "list my meetings" / "show my meetings"
+  - "what are my meetings" / "any meetings today"
+  - "buddy can you tell me what are the meeting schedule" → calendar_query for today
+  If the period is unclear or not mentioned, default to today's date range.
   Return: {"intent": "calendar_query", "start": "<ISO datetime>", "end": "<ISO datetime>", "label": "<human period>"}
   Where:
   - start = beginning of queried period (start of day: T00:00:00)
@@ -781,6 +784,59 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
           </View>
         )}
 
+        {/* ── Empty state: 0 tasks found ─────────────────────────────────── */}
+        {voiceMode === 'task_creation' && voiceState === 'done' && parsed.length === 0 && (
+          <View style={s.emptyDumpBlock}>
+            {/^(what|who|where|when|how|can you|tell me|show me|is there|do i|are there|could you|would you|buddy)/i.test(transcript.trim()) ? (
+              /* Looks like a question — redirect to Buddy */
+              <>
+                <Text style={s.emptyDumpIcon}>💬</Text>
+                <Text style={s.emptyDumpTitle}>That sounds like a question</Text>
+                <Text style={s.emptyDumpSub}>
+                  Voice Brain Dump creates tasks from what you say.{'\n'}
+                  For questions like schedules or news, ask Buddy instead.
+                </Text>
+                <TouchableOpacity
+                  style={s.emptyDumpBuddyBtn}
+                  onPress={() => nav.navigate('buddy')}
+                  activeOpacity={0.85}
+                >
+                  <Text style={s.emptyDumpBuddyText}>Ask Buddy instead  →</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
+                  <Text style={s.discardBtnText}>Try a task instead</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              /* Genuinely no tasks found — show examples */
+              <>
+                <Text style={s.emptyDumpIcon}>🤔</Text>
+                <Text style={s.emptyDumpTitle}>No tasks found</Text>
+                <Text style={s.emptyDumpSub}>
+                  Buddy couldn't find any obligations in what you said.{'\n'}
+                  Try speaking like these examples:
+                </Text>
+                <View style={s.emptyExamples}>
+                  {[
+                    '"Pay school fee of AED 14,000 by end of month"',
+                    '"Renew Emirates ID, expires in 5 days"',
+                    '"Car registration due next Saturday, AED 450"',
+                    '"Doctor appointment this Thursday at 10 AM"',
+                  ].map((ex, i) => (
+                    <View key={i} style={s.emptyExampleRow}>
+                      <View style={s.emptyExampleDot} />
+                      <Text style={s.emptyExampleText}>{ex}</Text>
+                    </View>
+                  ))}
+                </View>
+                <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
+                  <Text style={s.discardBtnText}>Try again</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
+
         {/* Calendar query results */}
         {voiceMode === 'calendar_query' && voiceState === 'done' && (
           <View style={s.resultsBlock}>
@@ -908,6 +964,24 @@ const s = StyleSheet.create({
   noEventsBlock: { backgroundColor: C.surface, borderRadius: 14, padding: 24, alignItems: 'center', borderWidth: 1, borderColor: C.border, marginBottom: 10, gap: 8 },
   noEventsEmoji: { fontSize: 32 },
   noEventsText:  { color: C.textSec, fontSize: 14, textAlign: 'center' },
+
+  // ── 0-tasks empty state
+  emptyDumpBlock: {
+    backgroundColor: C.surface, borderRadius: 18, padding: 22,
+    borderWidth: 1, borderColor: C.border, marginBottom: 16, alignItems: 'center', gap: 10,
+  },
+  emptyDumpIcon:  { fontSize: 36 },
+  emptyDumpTitle: { color: C.white, fontSize: 16, fontWeight: '700', textAlign: 'center' },
+  emptyDumpSub:   { color: C.textSec, fontSize: 13, lineHeight: 20, textAlign: 'center' },
+  emptyDumpBuddyBtn: {
+    backgroundColor: C.verdigris, borderRadius: 999,
+    paddingHorizontal: 24, paddingVertical: 12, marginTop: 4,
+  },
+  emptyDumpBuddyText: { color: C.white, fontSize: 14, fontWeight: '700' },
+  emptyExamples:  { alignSelf: 'stretch', gap: 8, marginTop: 4 },
+  emptyExampleRow:{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  emptyExampleDot:{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.verdigris, marginTop: 6, flexShrink: 0 },
+  emptyExampleText:{ color: C.textSec, fontSize: 12, lineHeight: 18, fontStyle: 'italic', flex: 1 },
 
   savedBlock: { alignItems: 'center', paddingVertical: 32, gap: 12 },
   savedIcon:  { fontSize: 40, color: C.verdigris },
