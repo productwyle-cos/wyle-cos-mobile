@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Dimensions, Animated, StatusBar, ActivityIndicator, Platform, Alert,
+  Dimensions, Animated, StatusBar, ActivityIndicator, Platform, Alert, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -237,7 +237,9 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
   const [userEmail, setUserEmail] = useState('mohammed@example.ae');
   const [userPhone, setUserPhone] = useState('+971 50 123 4567');
   const [location,  setLocation]  = useState('Dubai, UAE');
-  const [connecting, setConnecting] = useState(false);
+  const [connecting,      setConnecting]      = useState(false);
+  const [confirmRemoveEmail, setConfirmRemoveEmail] = useState<string | null>(null);
+  const [removing,        setRemoving]        = useState(false);
 
   const fadeIn  = useRef(new Animated.Value(0)).current;
   const slideUp = useRef(new Animated.Value(20)).current;
@@ -321,18 +323,24 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
   };
 
   // ── Disconnect a specific account ───────────────────────────────────────────
-  const handleDisconnectAccount = async (email: string) => {
-    Alert.alert(
-      'Disconnect account',
-      `Remove ${email} from Wyle?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Disconnect', style: 'destructive', onPress: async () => {
-          await disconnectGoogleAccount(email);
-          removeGAcc(email);
-        }},
-      ]
-    );
+  // NOTE: Alert.alert on React Native Web (browser) uses window.confirm which
+  // does NOT support custom button callbacks — so we use a Modal instead.
+  const handleDisconnectAccount = (email: string) => {
+    setConfirmRemoveEmail(email);   // show in-app confirmation modal
+  };
+
+  const confirmDisconnect = async () => {
+    if (!confirmRemoveEmail) return;
+    setRemoving(true);
+    try {
+      await disconnectGoogleAccount(confirmRemoveEmail);
+      removeGAcc(confirmRemoveEmail);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Could not remove account.');
+    } finally {
+      setRemoving(false);
+      setConfirmRemoveEmail(null);
+    }
   };
 
   // ── Sign out ────────────────────────────────────────────────────────────────
@@ -558,6 +566,55 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
 
       {/* ── Tab Bar ───────────────────────────────────────────────────────────── */}
       <TabBar active="connect" onTab={(sc) => nav.navigate(sc)} />
+
+      {/* ── Remove account confirmation modal ─────────────────────────────── */}
+      <Modal
+        visible={confirmRemoveEmail !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmRemoveEmail(null)}
+      >
+        <View style={dlg.overlay}>
+          <View style={dlg.box}>
+            {/* Header */}
+            <View style={dlg.header}>
+              <View style={dlg.warnIcon}>
+                <Text style={dlg.warnIconText}>!</Text>
+              </View>
+              <Text style={dlg.title}>Remove account</Text>
+            </View>
+
+            <Text style={dlg.message}>
+              Remove{'\n'}
+              <Text style={dlg.emailText}>{confirmRemoveEmail}</Text>
+              {'\n'}from Wyle?{'\n\n'}
+              Calendar events and emails from this account will no longer sync.
+            </Text>
+
+            <View style={dlg.btnRow}>
+              <TouchableOpacity
+                style={dlg.cancelBtn}
+                onPress={() => setConfirmRemoveEmail(null)}
+                activeOpacity={0.8}
+              >
+                <Text style={dlg.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={dlg.removeBtn}
+                onPress={confirmDisconnect}
+                activeOpacity={0.8}
+                disabled={removing}
+              >
+                {removing
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={dlg.removeText}>Remove</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -786,4 +843,39 @@ const s = StyleSheet.create({
   },
   orbWave:    { flexDirection: 'row', alignItems: 'center', gap: 2 },
   orbWaveBar: { width: 2.5, backgroundColor: '#FFFFFF', borderRadius: 2, opacity: 0.9 },
+});
+
+// ── Remove-account confirmation modal styles ──────────────────────────────────
+const dlg = StyleSheet.create({
+  overlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.72)',
+    alignItems: 'center', justifyContent: 'center', padding: 24,
+  },
+  box: {
+    backgroundColor: '#1A1A1A', borderRadius: 20,
+    padding: 24, width: '100%', maxWidth: 360,
+    borderWidth: 1, borderColor: '#2A2A2A',
+  },
+  header:      { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  warnIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: '#FF3B3018', borderWidth: 1, borderColor: '#FF3B3030',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  warnIconText:{ color: '#FF3B30', fontSize: 18, fontWeight: '800' },
+  title:       { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
+  message:     { color: '#9A9A9A', fontSize: 14, lineHeight: 22, marginBottom: 24 },
+  emailText:   { color: '#FFFFFF', fontWeight: '700' },
+  btnRow:      { flexDirection: 'row', gap: 10 },
+  cancelBtn: {
+    flex: 1, paddingVertical: 13, borderRadius: 12,
+    backgroundColor: '#252525', alignItems: 'center',
+    borderWidth: 1, borderColor: '#333',
+  },
+  cancelText:  { color: '#9A9A9A', fontSize: 14, fontWeight: '600' },
+  removeBtn: {
+    flex: 1, paddingVertical: 13, borderRadius: 12,
+    backgroundColor: '#FF3B30', alignItems: 'center',
+  },
+  removeText:  { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
 });
