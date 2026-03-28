@@ -532,10 +532,75 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
     }
   };
 
+  // ── Client-side calendar query detector (safety net before Claude) ──────────
+  // Catches phrases like "what meetings do I have today", "show my schedule", etc.
+  // Returns a date range if detected, null otherwise.
+  const detectCalendarQueryLocally = (text: string): { start: Date; end: Date; label: string } | null => {
+    const t = text.toLowerCase();
+    const isMeetingQuery =
+      /(meeting|meetings|scheduled|schedule|calendar|agenda|events?|appointments?)/.test(t) &&
+      /(what|when|show|tell|list|any|all|do i have|have i got|can you tell|how does|what.s on|what is on|what are)/.test(t);
+    if (!isMeetingQuery) return null;
+
+    const now = new Date();
+    // Resolve time period from transcript
+    if (/\btoday\b/.test(t) || !/(tomorrow|next week|this week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)/.test(t)) {
+      // Default: today
+      const start = new Date(now); start.setHours(0, 0, 0, 0);
+      const end   = new Date(now); end.setHours(23, 59, 59, 999);
+      return { start, end, label: 'Today' };
+    }
+    if (/\btomorrow\b/.test(t)) {
+      const start = new Date(now); start.setDate(now.getDate() + 1); start.setHours(0, 0, 0, 0);
+      const end   = new Date(start); end.setHours(23, 59, 59, 999);
+      return { start, end, label: 'Tomorrow' };
+    }
+    if (/\bthis week\b|\bnext week\b/.test(t)) {
+      const start = new Date(now); start.setHours(0, 0, 0, 0);
+      const end   = new Date(now); end.setDate(now.getDate() + 7); end.setHours(23, 59, 59, 999);
+      return { start, end, label: 'Next 7 days' };
+    }
+    // Named day of week
+    const DAYS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+    for (let d = 0; d < 7; d++) {
+      if (t.includes(DAYS[d])) {
+        const target = new Date(now);
+        const diff = (d - now.getDay() + 7) % 7 || 7; // next occurrence
+        target.setDate(now.getDate() + diff);
+        const start = new Date(target); start.setHours(0, 0, 0, 0);
+        const end   = new Date(target); end.setHours(23, 59, 59, 999);
+        const label = target.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+        return { start, end, label };
+      }
+    }
+    // Default to today if nothing resolved
+    const start = new Date(now); start.setHours(0, 0, 0, 0);
+    const end   = new Date(now); end.setHours(23, 59, 59, 999);
+    return { start, end, label: 'Today' };
+  };
+
   // ── Step 2: Send transcript to Claude ──────────────────────────────────────
   const parseWithClaude = async (text: string) => {
     if (!text.trim()) { setVoiceState('error'); return; }
     setVoiceState('parsing');
+
+    // ── Safety net: detect calendar queries client-side first ─────────────────
+    const localCalQuery = detectCalendarQueryLocally(text);
+    if (localCalQuery) {
+      setVoiceMode('calendar_query');
+      setCalendarQueryLabel(localCalQuery.label);
+      const result = await fetchEventsForDateRange(localCalQuery.start, localCalQuery.end);
+      setCalendarEvents(result.events);
+      setVoiceState('done');
+      const n = result.events.length;
+      Speech.speak(
+        n > 0
+          ? `You have ${n} ${n === 1 ? 'meeting' : 'meetings'} for ${localCalQuery.label}.`
+          : `No meetings found for ${localCalQuery.label}.`,
+        { language: 'en-US', rate: 0.95 },
+      );
+      return;
+    }
 
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -595,6 +660,27 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       setVoiceMode('task_creation');
       const items: ParsedObligation[] = response.items;
       if (!Array.isArray(items)) throw new Error('Invalid response');
+
+      // ── Post-Claude safety net: if Claude returned 0 items but the transcript
+      //    looks like a calendar query, route it correctly ─────────────────────
+      if (items.length === 0) {
+        const fallback = detectCalendarQueryLocally(text);
+        if (fallback) {
+          setVoiceMode('calendar_query');
+          setCalendarQueryLabel(fallback.label);
+          const result = await fetchEventsForDateRange(fallback.start, fallback.end);
+          setCalendarEvents(result.events);
+          setVoiceState('done');
+          const n = result.events.length;
+          Speech.speak(
+            n > 0
+              ? `You have ${n} ${n === 1 ? 'meeting' : 'meetings'} for ${fallback.label}.`
+              : `No meetings found for ${fallback.label}.`,
+            { language: 'en-US', rate: 0.95 },
+          );
+          return;
+        }
+      }
 
       // Give each a unique _id using timestamp
       const stamped = items.map((item, i) => ({
