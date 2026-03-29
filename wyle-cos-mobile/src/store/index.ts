@@ -76,8 +76,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   lastBriefKey: null,
   googleConnected: false,
   googleEmail: '',
-  googleAccounts: [],
-  outlookAccounts: [],
+  // Auto-load from localStorage so store survives page reloads / OAuth redirects
+  googleAccounts: (() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return JSON.parse(localStorage.getItem('wyle_google_accounts') ?? '[]');
+      }
+    } catch {}
+    return [];
+  })(),
+  outlookAccounts: (() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return JSON.parse(localStorage.getItem('wyle_outlook_accounts') ?? '[]');
+      }
+    } catch {}
+    return [];
+  })(),
   isLoading: false,
 
   setAuth: async (token, user) => {
