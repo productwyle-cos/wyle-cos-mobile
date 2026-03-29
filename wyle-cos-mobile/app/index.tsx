@@ -56,6 +56,7 @@ export default function AppEntry() {
           if (msCb !== null) {
             // This page load is a Microsoft OAuth callback
             if (msCb.success === true) {
+              console.log('[App] Microsoft OAuth success for:', msCb.email);
               const existingToken = await AsyncStorage.getItem('wyle_token');
               if (!existingToken) {
                 await AsyncStorage.setItem('wyle_token', 'microsoft_auth_token');
@@ -69,7 +70,10 @@ export default function AppEntry() {
               } else {
                 setScreen('home');
               }
-            } else {
+            } else if (msCb.success === false) {
+              console.error('[App] Microsoft OAuth failed:', msCb.error);
+              // Show error to user so they know connection failed
+              alert(`Microsoft connection failed:\n\n${msCb.error}\n\nCommon fix: Add your Codespace URL to Azure Portal → App Registration → Authentication → Redirect URIs`);
               setScreen(await AsyncStorage.getItem('wyle_token') ? 'home' : 'login');
             }
             setLoading(false);
