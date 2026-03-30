@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { SvgXml } from 'react-native-svg';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
@@ -22,7 +21,6 @@ import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
 import { UIObligation } from '../../types';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -44,399 +42,10 @@ const C = {
   border:     '#2A2A2A',
 };
 
-const ANTHROPIC_API_KEY   = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY   ?? '';
-const OPENAI_API_KEY      = process.env.EXPO_PUBLIC_OPENAI_API_KEY      ?? '';
-const ALPHAVANTAGE_KEY    = process.env.EXPO_PUBLIC_ALPHAVANTAGE_KEY    ?? '';
-const GNEWS_KEY           = process.env.EXPO_PUBLIC_GNEWS_KEY           ?? '';
-// Open-Meteo weather needs no key (completely free, no signup)
+const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
+const OPENAI_API_KEY    = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
-// ── SVG icon assets ───────────────────────────────────────────────────────────
-const MIC_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <rect x="9" y="2" width="6" height="11" rx="3" fill="#FFFFFF"/>
-  <path d="M5 11a7 7 0 0 0 14 0" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" fill="none"/>
-  <line x1="12" y1="18" x2="12" y2="22" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-  <line x1="8" y1="22" x2="16" y2="22" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
-</svg>`;
-
-const STOP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <rect x="7" y="7" width="10" height="10" rx="2" fill="#FFFFFF"/>
-</svg>`;
-
-const SEND_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path d="M12 20V4" stroke="#0D0D0D" stroke-width="2.5" stroke-linecap="round"/>
-  <path d="M5 11l7-7 7 7" stroke="#0D0D0D" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-</svg>`;
-
-const PLUS_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <line x1="12" y1="5" x2="12" y2="19" stroke="#1B998B" stroke-width="2.2" stroke-linecap="round"/>
-  <line x1="5" y1="12" x2="19" y2="12" stroke="#1B998B" stroke-width="2.2" stroke-linecap="round"/>
-</svg>`;
-
-// ── Chat history persistence ──────────────────────────────────────────────────
-const HISTORY_STORAGE_KEY = '@wyle:buddy_history';
-const HISTORY_RETENTION_DAYS = 7;   // keep 7 days of chat history
-const HISTORY_MAX_MESSAGES   = 150; // hard cap to prevent storage bloat
-
-async function loadHistory(): Promise<any[]> {
-  try {
-    const raw = await AsyncStorage.getItem(HISTORY_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed: any[] = JSON.parse(raw);
-    const cutoff = Date.now() - HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    // Filter out messages older than retention window, keep most recent cap
-    return parsed
-      .filter(m => new Date(m.timestamp).getTime() > cutoff)
-      .slice(-HISTORY_MAX_MESSAGES);
-  } catch {
-    return [];
-  }
-}
-
-async function saveHistory(messages: any[]): Promise<void> {
-  try {
-    // Serialize: keep only the fields we need (drop any base64 attachment data)
-    const toSave = messages.slice(-HISTORY_MAX_MESSAGES).map(m => ({
-      id:        m.id,
-      role:      m.role,
-      text:      m.text,
-      timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
-      // Save attachment metadata but NOT base64 content (too large)
-      attachment: m.attachment
-        ? { type: m.attachment.type, name: m.attachment.name }
-        : undefined,
-    }));
-    await AsyncStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(toSave));
-  } catch (e) {
-    console.warn('[Buddy] Failed to save history:', e);
-  }
-}
-
-// ── Detect whether a message needs task context ───────────────────────────────
-const TASK_KEYWORDS = [
-  'task', 'obligation', 'priority', 'priorities', 'urgent', 'due', 'deadline',
-  'pending', 'complete', 'completed', 'done', 'finish', 'resolve', 'resolved',
-  'mark', 'paid', 'automat', 'remind', 'schedule', 'overdue', 'brief',
-  'morning brief', 'today\'s', 'this week', 'what do i have', 'what should i',
-  'what have i', 'los score', 'optimization score', 'top item', 'top priority',
-  'my list', 'my tasks', 'my obligation', 'visa', 'dewa', 'salik', 'bill',
-  'invoice', 'rent', 'insurance', 'renewal', 'expire', 'expir',
-];
-
-function isTaskQuery(text: string): boolean {
-  const lower = text.toLowerCase();
-  return TASK_KEYWORDS.some(kw => lower.includes(kw));
-}
-
-// ── Detect whether a message needs live web data ──────────────────────────────
-// These queries need real-time information — sports scores, flights, prices,
-// weather, news, etc. We pass Anthropic's built-in web_search tool so Claude
-// can fetch live data server-side without any extra API key.
-const REALTIME_KEYWORDS = [
-  // sports / events
-  'won', 'winner', 'score', 'match', 'game', 'result', 'played', 'tournament',
-  'ipl', 'cricket', 'football', 'fifa', 'nba', 'ufc', 'f1', 'grand prix',
-  // travel / flights
-  'flight', 'flights', 'available flight', 'booking', 'ticket', 'airlines',
-  'travel to', 'fly to', 'airport',
-  // prices / markets
-  'gold rate', 'gold price', 'silver price', 'dollar rate', 'exchange rate',
-  'stock price', 'share price', 'crypto', 'bitcoin',
-  // news / world events
-  'latest news', 'current update', 'breaking', 'war', 'election', 'today news',
-  'what happened', 'update on', 'news about',
-  // weather
-  'weather', 'temperature', 'forecast', 'rain', 'humidity',
-];
-
-function isRealTimeQuery(text: string): boolean {
-  const lower = text.toLowerCase();
-  return REALTIME_KEYWORDS.some(kw => lower.includes(kw));
-}
-
-// ── Anthropic built-in web search tool ───────────────────────────────────────
-const WEB_SEARCH_TOOL = {
-  type: 'web_search_20250305' as const,
-  name: 'web_search',
-};
-
-// ── Executive data router — fetches live data BEFORE calling Claude ───────────
-// Keeps Claude prompt small and gives accurate numbers from primary sources.
-// Each fetcher returns a string snippet that gets prepended to the system prompt.
-
-async function fetchCryptoPrice(query: string): Promise<string | null> {
-  // Detect coin from query
-  const q = query.toLowerCase();
-  const coinMap: Record<string, string> = {
-    bitcoin: 'bitcoin', btc: 'bitcoin',
-    ethereum: 'ethereum', eth: 'ethereum',
-    xrp: 'ripple', ripple: 'ripple',
-    sol: 'solana', solana: 'solana',
-    bnb: 'binancecoin',
-    usdt: 'tether', tether: 'tether',
-    ada: 'cardano', cardano: 'cardano',
-    doge: 'dogecoin', dogecoin: 'dogecoin',
-  };
-  const coinId = Object.entries(coinMap).find(([k]) => q.includes(k))?.[1];
-  if (!coinId) return null;
-  try {
-    const res = await fetch(
-      `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd,aed&include_24hr_change=true`,
-      { headers: { 'Accept': 'application/json' } }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const d = data[coinId];
-    if (!d) return null;
-    const change = d.usd_24h_change?.toFixed(2);
-    const sign   = change >= 0 ? '+' : '';
-    return `[LIVE DATA — CoinGecko] ${coinId.charAt(0).toUpperCase() + coinId.slice(1)}: $${d.usd?.toLocaleString()} USD / AED ${d.aed?.toLocaleString()} | 24h: ${sign}${change}%`;
-  } catch { return null; }
-}
-
-async function fetchForexRate(query: string): Promise<string | null> {
-  const q = query.toLowerCase();
-  if (!q.match(/exchange rate|forex|currency|dollar|euro|pound|rupee|dirham|yen|yuan|inr|gbp|eur|jpy|usd|aed|sar/)) return null;
-
-  // ── Step 1: detect specific currency pair and use Alpha Vantage (real-time) ──
-  const pairMap: Array<[RegExp, string, string]> = [
-    [/rupee|inr/,    'USD', 'INR'],
-    [/dirham|aed/,   'USD', 'AED'],
-    [/euro|eur\b/,   'USD', 'EUR'],
-    [/pound|gbp/,    'USD', 'GBP'],
-    [/yen|jpy/,      'USD', 'JPY'],
-    [/yuan|cny/,     'USD', 'CNY'],
-    [/riyal|sar/,    'USD', 'SAR'],
-  ];
-  const matched = pairMap.find(([re]) => re.test(q));
-
-  if (matched && ALPHAVANTAGE_KEY) {
-    const [, from, to] = matched;
-    try {
-      const res = await fetch(
-        `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE` +
-        `&from_currency=${from}&to_currency=${to}&apikey=${ALPHAVANTAGE_KEY}`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const rate = data['Realtime Currency Exchange Rate'];
-        if (rate?.['5. Exchange Rate']) {
-          const price     = parseFloat(rate['5. Exchange Rate']).toFixed(4);
-          const refreshed = rate['6. Last Refreshed'] ?? 'just now';
-          return `[LIVE DATA — AlphaVantage Realtime] ${from}/${to}: ${price} (as of ${refreshed} UTC)`;
-        }
-      }
-    } catch { /* fall through to overview */ }
-  }
-
-  // ── Step 2: fallback — broad overview from Cloudflare Pages (more reliable than jsDelivr) ──
-  try {
-    const res = await fetch('https://latest.currency-api.pages.dev/v1/currencies/usd.json');
-    if (!res.ok) throw new Error('pages.dev failed');
-    const data = await res.json();
-    const r = data.usd;
-    if (!r) return null;
-    const snippet = [
-      `USD/AED: ${r.aed?.toFixed(4)}`,
-      `USD/EUR: ${r.eur?.toFixed(4)}`,
-      `USD/GBP: ${r.gbp?.toFixed(4)}`,
-      `USD/INR: ${r.inr?.toFixed(2)}`,
-      `USD/JPY: ${r.jpy?.toFixed(2)}`,
-      `USD/SAR: ${r.sar?.toFixed(4)}`,
-    ].join(' | ');
-    return `[LIVE DATA — CurrencyAPI] ${snippet}`;
-  } catch { return null; }
-}
-
-// ── Gold / Silver prices via Alpha Vantage (same key as stocks, no extra signup)
-async function fetchMetalPrice(query: string): Promise<string | null> {
-  if (!ALPHAVANTAGE_KEY) return null;
-  const q = query.toLowerCase();
-  if (!q.match(/gold|silver|metal|xau|xag/)) return null;
-
-  // Fetch gold and silver in parallel
-  const fetchMetal = async (from: string, label: string) => {
-    const res = await fetch(
-      `https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=${from}&to_currency=USD&apikey=${ALPHAVANTAGE_KEY}`
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const rate = data['Realtime Currency Exchange Rate'];
-    if (!rate) return null;
-    const priceUsd = parseFloat(rate['5. Exchange Rate']).toFixed(2);
-    const priceAed = (parseFloat(priceUsd) * 3.6725).toFixed(2);
-    return `${label}: $${priceUsd}/oz USD | AED ${priceAed}/oz`;
-  };
-
-  try {
-    const wantsGold   = q.match(/gold|xau/);
-    const wantsSilver = q.match(/silver|xag/);
-    const results = await Promise.allSettled([
-      wantsGold   ? fetchMetal('XAU', 'Gold (XAU)')   : Promise.resolve(null),
-      wantsSilver ? fetchMetal('XAG', 'Silver (XAG)') : Promise.resolve(null),
-      // Always fetch gold if query just says "metal" or "price" without specifying
-      (!wantsGold && !wantsSilver) ? fetchMetal('XAU', 'Gold (XAU)') : Promise.resolve(null),
-    ]);
-    const parts = results
-      .map(r => r.status === 'fulfilled' ? r.value : null)
-      .filter(Boolean) as string[];
-    return parts.length ? `[LIVE DATA — AlphaVantage Metals] ${parts.join(' | ')}` : null;
-  } catch { return null; }
-}
-
-// ── Stock price (Alpha Vantage) ───────────────────────────────────────────────
-async function fetchStockPrice(query: string): Promise<string | null> {
-  if (!ALPHAVANTAGE_KEY) return null;
-  const q = query.toLowerCase();
-  // Extract ticker or map common company names to tickers
-  const tickerMap: Record<string, string> = {
-    apple: 'AAPL', microsoft: 'MSFT', google: 'GOOGL', alphabet: 'GOOGL',
-    amazon: 'AMZN', meta: 'META', facebook: 'META', tesla: 'TSLA',
-    nvidia: 'NVDA', netflix: 'NFLX', 'saudi aramco': '2222.SR',
-    adnoc: 'ADNOCDIST.AD', 'emaar': 'EMAAR.DU', 'etisalat': 'ETISALAT.AD',
-    'emirates nbd': 'ENBD.DU', 'first abu dhabi': 'FAB.AD',
-  };
-  let symbol = Object.entries(tickerMap).find(([name]) => q.includes(name))?.[1];
-  // Also detect raw tickers like "AAPL stock" or "TSLA price"
-  if (!symbol) {
-    const tickerMatch = query.match(/\b([A-Z]{2,5})\b/);
-    if (tickerMatch) symbol = tickerMatch[1];
-  }
-  if (!symbol) return null;
-  try {
-    const res = await fetch(
-      `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${ALPHAVANTAGE_KEY}`
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const quote = data['Global Quote'];
-    if (!quote || !quote['05. price']) return null;
-    const price  = parseFloat(quote['05. price']).toFixed(2);
-    const change = parseFloat(quote['09. change']).toFixed(2);
-    const pct    = parseFloat(quote['10. change percent']).toFixed(2);
-    const sign   = parseFloat(change) >= 0 ? '+' : '';
-    return `[LIVE DATA — AlphaVantage] ${symbol}: $${price} | Change: ${sign}${change} (${sign}${pct}%)`;
-  } catch { return null; }
-}
-
-// ── Business news headlines (GNews) ──────────────────────────────────────────
-async function fetchNews(query: string): Promise<string | null> {
-  if (!GNEWS_KEY) return null;
-  const q = query.toLowerCase();
-  if (!q.match(/news|update|headline|latest|happening|trend|event|market update/)) return null;
-  // Pick topic category based on keywords
-  const topic = q.match(/tech|technology|ai|startup/) ? 'technology'
-              : q.match(/sport|ipl|cricket|football|match/) ? 'sports'
-              : 'business';
-  try {
-    const res = await fetch(
-      `https://gnews.io/api/v4/top-headlines?topic=${topic}&lang=en&max=5&apikey=${GNEWS_KEY}`
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const articles = data.articles?.slice(0, 4);
-    if (!articles?.length) return null;
-    const headlines = articles.map((a: any, i: number) =>
-      `${i + 1}. ${a.title} (${a.source?.name})`
-    ).join('\n');
-    return `[LIVE DATA — GNews Top ${topic} headlines]\n${headlines}`;
-  } catch { return null; }
-}
-
-// ── Weather via Open-Meteo (100% free, no API key, no signup) ────────────────
-// City coordinates for the GCC region
-const CITY_COORDS: Record<string, { lat: number; lon: number; name: string }> = {
-  dubai:      { lat: 25.2048, lon: 55.2708, name: 'Dubai' },
-  'abu dhabi':{ lat: 24.4539, lon: 54.3773, name: 'Abu Dhabi' },
-  sharjah:    { lat: 25.3463, lon: 55.4209, name: 'Sharjah' },
-  riyadh:     { lat: 24.6877, lon: 46.7219, name: 'Riyadh' },
-  doha:       { lat: 25.2854, lon: 51.5310, name: 'Doha' },
-  kuwait:     { lat: 29.3759, lon: 47.9774, name: 'Kuwait City' },
-  muscat:     { lat: 23.5880, lon: 58.3829, name: 'Muscat' },
-};
-
-const WMO_CODES: Record<number, string> = {
-  0:'Clear sky', 1:'Mainly clear', 2:'Partly cloudy', 3:'Overcast',
-  45:'Foggy', 48:'Icy fog', 51:'Light drizzle', 53:'Drizzle', 55:'Heavy drizzle',
-  61:'Light rain', 63:'Rain', 65:'Heavy rain', 71:'Light snow', 73:'Snow',
-  80:'Showers', 81:'Heavy showers', 95:'Thunderstorm', 99:'Hail storm',
-};
-
-async function fetchWeather(query: string): Promise<string | null> {
-  const q = query.toLowerCase();
-  if (!q.match(/weather|temperature|forecast|rain|humid|hot|cold|outside|climate|sunny/)) return null;
-
-  // Detect city from query, default to Dubai
-  const cityKey = Object.keys(CITY_COORDS).find(k => q.includes(k)) ?? 'dubai';
-  const { lat, lon, name } = CITY_COORDS[cityKey];
-
-  try {
-    const res = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
-      `&current_weather=true&hourly=relativehumidity_2m,apparent_temperature` +
-      `&timezone=Asia%2FDubai&forecast_days=1`
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const cw   = data.current_weather;
-    const cond = WMO_CODES[cw.weathercode] ?? 'Unknown';
-    // Grab current hour humidity from hourly array
-    const hourIdx  = new Date().getHours();
-    const humidity = data.hourly?.relativehumidity_2m?.[hourIdx] ?? '—';
-    const feelsLike = data.hourly?.apparent_temperature?.[hourIdx]?.toFixed(1) ?? '—';
-    return `[LIVE DATA — Open-Meteo] ${name}: ${cw.temperature}°C (feels ${feelsLike}°C) | ${cond} | Humidity: ${humidity}% | Wind: ${cw.windspeed} km/h`;
-  } catch { return null; }
-}
-
-// ── Router: try ALL dedicated APIs in parallel, return combined context ───────
-async function fetchLiveDataContext(query: string): Promise<string | null> {
-  const results = await Promise.allSettled([
-    fetchCryptoPrice(query),
-    fetchForexRate(query),
-    fetchMetalPrice(query),
-    fetchStockPrice(query),
-    fetchNews(query),
-    fetchWeather(query),
-  ]);
-  const snippets = results
-    .map(r => r.status === 'fulfilled' ? r.value : null)
-    .filter(Boolean) as string[];
-  return snippets.length > 0 ? snippets.join('\n') : null;
-}
-
-// Max messages sent to Claude API per call — prevents token limit errors
-const API_HISTORY_LIMIT = 12;
-
-// ── System prompt — two modes ─────────────────────────────────────────────────
-function buildSystemPrompt(
-  obligations: UIObligation[],
-  includeTaskContext: boolean,
-  liveDataSnippet?: string | null,
-): string {
-  const personality = `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
-
-Your personality:
-- Calm, confident, warm, direct. You speak like a trusted friend who is highly competent.
-- Every reply saves the user time. Be short and actionable. Max 3-4 sentences unless asked for more.
-- Never panic. Focus on solutions.
-- Human and respectful. Never robotic.
-- When responding to voice, keep it even shorter — 2-3 sentences max so it sounds natural spoken aloud.
-
-The user's current context:
-- Location: Dubai, UAE
-- Respond in English unless user writes in Arabic, then respond in Arabic`;
-
-  // If live data was fetched from a dedicated API, inject it prominently
-  const liveBlock = liveDataSnippet
-    ? `\n\nLIVE MARKET DATA — FETCHED RIGHT NOW (real-time API):\n${liveDataSnippet}\n\nCRITICAL INSTRUCTION: You MUST use ONLY the exact figures shown above. Do NOT use rates from your training data. Do NOT say "around", "approximately", or give a different number. Quote the exact value from LIVE MARKET DATA.`
-    : '';
-
-  if (!includeTaskContext) {
-    return `${personality}${liveBlock}
-
-STRICT RULE FOR THIS MESSAGE: The user is asking a general question unrelated to their tasks or schedule. Answer ONLY what was asked. Do NOT mention, reference, redirect to, or bring up any tasks, obligations, due dates, bills, fees, priorities, or to-do items — even if you are aware of them from earlier in the conversation. Keep the response completely focused on the question asked.`;
-  }
-
-  // Task-related question — inject full obligations context
+function buildSystemPrompt(obligations: UIObligation[]): string {
   const active    = obligations.filter(o => o.status === 'active');
   const completed = obligations.filter(o => o.status === 'completed');
 
@@ -450,19 +59,28 @@ STRICT RULE FOR THIS MESSAGE: The user is asking a general question unrelated to
     ? completed.map(o => `  * ✅ ${o.emoji} ${o.title}`).join('\n')
     : '';
 
-  return `${personality}${liveBlock}
+  return `You are Buddy, the AI-powered personal chief of staff inside Wyle — a life management app for busy professionals in Dubai, UAE.
 
-The user's task context:
+Your personality:
+- Calm, confident, warm, direct. You speak like a trusted friend who is highly competent.
+- Every reply saves the user time. Be short and actionable. Max 3-4 sentences unless asked for more.
+- Never panic. Focus on solutions.
+- Human and respectful. Never robotic.
+- When responding to voice, keep it even shorter — 2-3 sentences max so it sounds natural spoken aloud.
+
+The user's current life context:
 - Life Optimization Score (LOS): 74/100
+- Location: Dubai, UAE
 - Active obligations (${active.length}):
 ${activeList}${completedList ? `\n- Already completed:\n${completedList}` : ''}
 - Time saved this week: 4h 20m
 - Decisions handled: 12
 
 Rules:
-- Always show a certainty score (e.g. "95% confident") before suggesting a task action
+- Always show a certainty score (e.g. "95% confident") before suggesting an action
 - When the user says they have paid, completed, done, or resolved an obligation, check the "Already completed" list first. If it is already there, tell the user it was already marked done — do NOT call the resolve_obligation tool again.
-- Only call resolve_obligation for obligations that are currently in the Active obligations list.`;
+- Only call resolve_obligation for obligations that are currently in the Active obligations list.
+- Respond in English unless user writes in Arabic, then respond in Arabic`;
 }
 
 const RESOLVE_TOOL = [{
@@ -703,28 +321,32 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 const bub = StyleSheet.create({
-  userRow:    { alignItems: 'flex-end', marginBottom: 16, paddingHorizontal: 16 },
+  userRow:    { alignItems: 'flex-end', marginBottom: 14, paddingHorizontal: 16 },
   userBubble: {
-    backgroundColor: C.verdigris, borderRadius: 20, borderBottomRightRadius: 4,
-    padding: 14, maxWidth: width * 0.72,
+    backgroundColor: C.verdigris, borderRadius: 18, borderBottomRightRadius: 3,
+    paddingHorizontal: 14, paddingVertical: 11, maxWidth: width * 0.74,
+    shadowColor: C.verdigris, shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25, shadowRadius: 6, elevation: 3,
   },
-  userText:   { color: C.white, fontSize: 15, lineHeight: 21 },
-  buddyRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 16, paddingHorizontal: 16 },
+  userText:   { color: C.white, fontSize: 14, lineHeight: 20 },
+  buddyRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: 9, marginBottom: 14, paddingHorizontal: 14 },
   avatar:     {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: `${C.verdigris}18`,
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: `${C.verdigris}12`,
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: `${C.verdigris}35`,
-    marginTop: 18,
+    borderWidth: 1, borderColor: `${C.verdigris}40`,
+    marginTop: 16,
   },
-  avatarText: { color: C.verdigris, fontSize: 14 },
-  buddyLabel: { color: C.verdigris, fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginBottom: 4 },
+  avatarText: { color: C.verdigris, fontSize: 12 },
+  buddyLabel: { color: `${C.verdigris}BB`, fontSize: 8, fontWeight: '800', letterSpacing: 2, marginBottom: 4 },
   buddyBubble:{
-    backgroundColor: C.surface, borderRadius: 20, borderBottomLeftRadius: 4,
-    padding: 14, maxWidth: width * 0.72, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surface, borderRadius: 18, borderBottomLeftRadius: 3,
+    paddingHorizontal: 14, paddingVertical: 11, maxWidth: width * 0.74,
+    borderWidth: 1, borderColor: `${C.verdigris}18`,
+    borderLeftWidth: 2, borderLeftColor: `${C.verdigris}55`,
   },
-  buddyText:  { color: C.white, fontSize: 15, lineHeight: 22 },
-  time:       { color: C.textTer, fontSize: 10, marginTop: 4 },
+  buddyText:  { color: C.white, fontSize: 14, lineHeight: 21 },
+  time:       { color: C.textTer, fontSize: 9, marginTop: 3, letterSpacing: 0.2 },
   // Attachment styles
   attachImage: {
     width: '100%', height: 180, borderRadius: 12,
@@ -744,79 +366,38 @@ const bub = StyleSheet.create({
 // Mic button with animated ring
 // ─────────────────────────────────────────────────────────────────────────────
 function MicButton({ voiceState, onPress }: { voiceState: VoiceState; onPress: () => void }) {
-  const pulse  = useRef(new Animated.Value(1)).current;
-  const ripple = useRef(new Animated.Value(0)).current;
+  const pulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (voiceState === 'recording') {
       Animated.loop(Animated.sequence([
-        Animated.timing(pulse,  { toValue: 1.1,  duration: 800, useNativeDriver: true }),
-        Animated.timing(pulse,  { toValue: 1,    duration: 800, useNativeDriver: true }),
-      ])).start();
-      Animated.loop(Animated.sequence([
-        Animated.timing(ripple, { toValue: 1,    duration: 900, useNativeDriver: true }),
-        Animated.timing(ripple, { toValue: 0,    duration: 0,   useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1.3, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1,   duration: 600, useNativeDriver: true }),
       ])).start();
     } else {
       pulse.stopAnimation();
-      ripple.stopAnimation();
-      Animated.timing(pulse,  { toValue: 1, duration: 150, useNativeDriver: true }).start();
-      ripple.setValue(0);
+      pulse.setValue(1);
     }
   }, [voiceState]);
 
   const isRecording    = voiceState === 'recording';
   const isTranscribing = voiceState === 'transcribing';
-
-  const rippleScale   = ripple.interpolate({ inputRange: [0, 1], outputRange: [1, 1.7] });
-  const rippleOpacity = ripple.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.4, 0.15, 0] });
+  const bgColor     = isRecording ? `${C.salmon}28` : isTranscribing ? `${C.chartreuse}18` : `${C.salmon}14`;
+  const borderColor = isRecording ? C.salmon : isTranscribing ? C.chartreuse : `${C.salmon}38`;
 
   return (
-    <TouchableOpacity onPress={onPress} disabled={isTranscribing} activeOpacity={0.8}>
-      <View style={mic.wrap}>
-        {/* Ripple ring — only visible while recording */}
-        {isRecording && (
-          <Animated.View style={[
-            mic.ripple,
-            { transform: [{ scale: rippleScale }], opacity: rippleOpacity },
-          ]} />
-        )}
-        <Animated.View style={[
-          mic.btn,
-          isRecording    && mic.btnRecording,
-          isTranscribing && mic.btnProcessing,
-          { transform: [{ scale: pulse }] },
-        ]}>
-          {isTranscribing
-            ? <ActivityIndicator color={C.white} size="small" />
-            : <SvgXml xml={isRecording ? STOP_SVG : MIC_SVG} width={18} height={18} />
-          }
-        </Animated.View>
-      </View>
+    <TouchableOpacity onPress={onPress} disabled={isTranscribing}>
+      <Animated.View style={[mic.btn, { backgroundColor: bgColor, borderColor, transform: [{ scale: pulse }] }]}>
+        {isTranscribing
+          ? <ActivityIndicator color={C.chartreuse} size="small" />
+          : <Text style={{ fontSize: 18 }}>{isRecording ? '⏹️' : '🎙️'}</Text>
+        }
+      </Animated.View>
     </TouchableOpacity>
   );
 }
 const mic = StyleSheet.create({
-  wrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  ripple: {
-    position: 'absolute',
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: C.crimson,
-  },
-  btn: {
-    width: 44, height: 44, borderRadius: 22,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: C.surfaceEl,
-    borderWidth: 1.5, borderColor: `${C.salmon}50`,
-  },
-  btnRecording: {
-    backgroundColor: C.crimson,
-    borderColor: C.crimson,
-  },
-  btnProcessing: {
-    backgroundColor: C.verdigris,
-    borderColor: C.verdigris,
-  },
+  btn: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -836,15 +417,11 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
     visa: '✈️', driving_license: '🚗', other: '📄',
   };
 
-  const WELCOME_MSG: Message = {
+  const [messages, setMessages] = useState<Message[]>([{
     id: '0', role: 'buddy',
-    text: "Hey! I'm Buddy — your personal chief of staff. 👋\n\nAsk me anything, or tap 🎙️ to talk.",
+    text: "Hey! I'm Buddy — your personal chief of staff. 👋\n\nYou have 2 urgent items today: your UAE visa expires in 8 days and your school fee of AED 14,000 is due today.\n\nTap 🎙️ to talk, or type below.",
     timestamp: new Date(),
-  };
-
-  const [messages, setMessages]           = useState<Message[]>([WELCOME_MSG]);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  }]);
   const [input, setInput]             = useState('');
   const [loading, setLoading]         = useState(false);
   const [showQuick, setShowQuick]     = useState(true);
@@ -862,23 +439,6 @@ export default function BuddyScreen({ navigation }: { navigation: NavProp }) {
 
   const scrollToEnd = () =>
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
-
-  // ── Load chat history from AsyncStorage on first mount ───────────────────
-  useEffect(() => {
-    (async () => {
-      const saved = await loadHistory();
-      if (saved.length > 0) {
-        // Restore timestamps as Date objects
-        const restored: Message[] = saved.map(m => ({
-          ...m,
-          timestamp: new Date(m.timestamp),
-        }));
-        setMessages(restored);
-        setShowQuick(false); // hide quick prompts if there's existing history
-      }
-      setHistoryLoaded(true);
-    })();
-  }, []);
 
   // ── Attachment helpers ──────────────────────────────────────────────────────
   const detectFileType = (mimeType: string, name: string): AttachmentType => {
@@ -1260,19 +820,10 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     if (!pendingResolve) return;
     resolveObligation(pendingResolve.id);
     const msg = `✅ Done! "${pendingResolve.title}" is marked as completed and removed from your active list.`;
-    setMessages(prev => { const u = [...prev, { id: uid(), role: 'buddy' as const, text: msg, timestamp: new Date() }]; saveHistory(u); return u; });
+    setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: msg, timestamp: new Date() }]);
     speakText(`Done! ${pendingResolve.title} has been marked as completed.`);
     setPendingResolve(null);
     scrollToEnd();
-  };
-
-  const handleClearChat = async () => {
-    setShowClearConfirm(false);
-    await AsyncStorage.removeItem(HISTORY_STORAGE_KEY);
-    setMessages([WELCOME_MSG]);
-    setShowQuick(true);
-    setPendingResolve(null);
-    setPendingObligationFromScan(null);
   };
 
   const handleCancelResolve = () => {
@@ -1351,55 +902,27 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
     scrollToEnd();
 
     try {
-      // Only send last API_HISTORY_LIMIT messages to avoid token limit errors.
-      // Full history is stored locally (AsyncStorage) but only a window is sent.
       const history = [...messages, userMsg]
-        .slice(-API_HISTORY_LIMIT)
         .map(m => ({
           role: m.role === 'user' ? 'user' : 'assistant' as const,
+          // Use a placeholder for file-only messages so Claude API never receives empty content
           content: m.text.trim() || (m.attachment ? `[User uploaded a ${m.attachment.type}: ${m.attachment.name}]` : '[message]'),
         }))
         .filter(m => m.content.trim().length > 0);
 
-      const taskRelated    = isTaskQuery(text.trim());
-      const needsLiveData  = isRealTimeQuery(text.trim());
-
-      // ── Executive data router ─────────────────────────────────────────────
-      // For financial/market queries, fetch from dedicated APIs first.
-      // The live snippet is prepended to the system prompt so Claude quotes
-      // real numbers instead of guessing or saying "I don't have access".
-      let liveDataSnippet: string | null = null;
-      if (needsLiveData) {
-        liveDataSnippet = await fetchLiveDataContext(text.trim());
-      }
-
-      // Build tools array:
-      // • web_search — fallback ONLY when real-time needed but dedicated API
-      //   returned nothing (prevents double-fetching + token bloat)
-      // • resolve_obligation — only for task-related queries
-      const useWebSearch = needsLiveData && !liveDataSnippet;
-      const tools: any[] = [
-        ...(useWebSearch ? [WEB_SEARCH_TOOL] : []),
-        ...(taskRelated  ? RESOLVE_TOOL      : []),
-      ];
-
-      // web_search_20250305 requires the beta header; other calls work without it
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-        ...(useWebSearch ? { 'anthropic-beta': 'web-search-2025-03-05' } : {}),
-      };
-
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
         body: JSON.stringify({
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 800,
-          system: buildSystemPrompt(obligations, taskRelated, liveDataSnippet),
-          ...(tools.length > 0 ? { tools } : {}),
+          max_tokens: 500,
+          system: buildSystemPrompt(obligations),
+          tools: RESOLVE_TOOL,
           messages: history,
         }),
       });
@@ -1407,7 +930,6 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message || 'API error');
 
-      // Handle resolve_obligation tool call (client-side tool — needs confirmation)
       if (data.stop_reason === 'tool_use') {
         const toolUse = data.content?.find((c: any) => c.type === 'tool_use');
         if (toolUse?.name === 'resolve_obligation') {
@@ -1420,26 +942,14 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         }
       }
 
-      // web_search is a server-side tool — Anthropic handles it automatically.
-      // The response content array may contain tool_use + tool_result + text blocks.
-      // Always extract the LAST text block which contains the final answer.
-      const textBlocks = (data.content ?? []).filter((c: any) => c.type === 'text');
-      const responseText = textBlocks[textBlocks.length - 1]?.text ?? "Something went wrong. Try again?";
-
+      const responseText = data.content?.[0]?.text ?? "Something went wrong. Try again?";
       const buddyMsg: Message = { id: uid(), role: 'buddy', text: responseText, timestamp: new Date() };
-      setMessages(prev => {
-        const updated = [...prev, buddyMsg];
-        saveHistory(updated);   // persist after every buddy reply
-        return updated;
-      });
+      setMessages(prev => [...prev, buddyMsg]);
       if (speakResponse) speakText(responseText);
-    } catch (err: any) {
-      console.warn('[Buddy] sendMessage error:', err?.message ?? err);
-      // Show the actual API error in dev so it's easy to diagnose
-      const errDetail = __DEV__ ? `\n\n(${err?.message ?? 'unknown error'})` : '';
-      const fallback = `Sorry, I'm having a connection issue right now. Please check your internet connection and try again.${errDetail}`;
+    } catch {
+      const fallback = "I'm having a connection issue. Your most urgent item is your UAE visa — it expires in 8 days. Want me to walk you through the GDRFA renewal process?";
       setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: fallback, timestamp: new Date() }]);
-      if (speakResponse) speakText("Sorry, I'm having a connection issue. Please try again.");
+      if (speakResponse) speakText(fallback);
     } finally {
       setLoading(false);
       scrollToEnd();
@@ -1537,24 +1047,12 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         <View style={s.header}>
           {/* Buddy identity */}
           <View style={s.headerLeft}>
-            {/* Avatar: concentric rings + orb core */}
-            <View style={s.avatarOuter}>
-              <View style={s.avatarInner}>
-                <LinearGradient
-                  colors={[C.verdigris, '#0D7A6E']}
-                  style={s.avatarGrad}
-                >
-                  <SvgXml xml={MIC_SVG} width={16} height={16} />
-                </LinearGradient>
-              </View>
+            <View style={s.buddyRing}>
+              <Text style={s.buddyRingIcon}>◎</Text>
             </View>
-
             <View>
               <Text style={s.headerTitle}>Buddy</Text>
-              <View style={s.headerSubRow}>
-                <View style={s.onlineDot} />
-                <Text style={s.headerSub}>Personal Chief of Staff</Text>
-              </View>
+              <Text style={s.headerSub}>Personal Chief of Staff</Text>
             </View>
           </View>
 
@@ -1562,18 +1060,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
           <View style={s.headerRight}>
             {isSpeaking && (
               <TouchableOpacity style={s.speakingBtn} onPress={stopSpeaking}>
-                <SvgXml xml={STOP_SVG} width={12} height={12} />
-                <Text style={s.speakingBtnText}>Stop</Text>
-              </TouchableOpacity>
-            )}
-            {/* Clear chat button */}
-            {messages.length > 1 && (
-              <TouchableOpacity
-                style={s.clearBtn}
-                onPress={() => setShowClearConfirm(true)}
-                activeOpacity={0.75}
-              >
-                <Text style={s.clearBtnText}>Clear</Text>
+                <Text style={s.speakingBtnText}>⏸ Stop</Text>
               </TouchableOpacity>
             )}
             <MicButton voiceState={voiceState} onPress={handleVoicePress} />
@@ -1706,12 +1193,11 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         <View style={s.inputBar}>
           {/* + Attach button */}
           <TouchableOpacity
-            style={[s.attachBtn, voiceState !== 'idle' && { opacity: 0.4 }]}
+            style={s.attachBtn}
             onPress={() => setAttachMenuVisible(true)}
             disabled={voiceState !== 'idle'}
-            activeOpacity={0.75}
           >
-            <SvgXml xml={PLUS_SVG} width={20} height={20} />
+            <Text style={s.attachBtnText}>＋</Text>
           </TouchableOpacity>
 
           <TextInput
@@ -1740,41 +1226,10 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
           >
             {loading
               ? <ActivityIndicator color={C.bg} size="small" />
-              : <SvgXml xml={SEND_SVG} width={18} height={18} />
+              : <Text style={s.sendIcon}>↑</Text>
             }
           </TouchableOpacity>
         </View>
-
-        {/* ── Clear chat confirmation modal ──────────────────────────── */}
-        <Modal
-          visible={showClearConfirm}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setShowClearConfirm(false)}
-        >
-          <View style={s.clearOverlay}>
-            <View style={s.clearBox}>
-              <Text style={s.clearBoxTitle}>Clear chat history?</Text>
-              <Text style={s.clearBoxSub}>
-                All messages will be permanently deleted. This cannot be undone.
-              </Text>
-              <View style={s.clearBoxBtns}>
-                <TouchableOpacity
-                  style={s.clearBoxCancel}
-                  onPress={() => setShowClearConfirm(false)}
-                >
-                  <Text style={s.clearBoxCancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={s.clearBoxConfirm}
-                  onPress={handleClearChat}
-                >
-                  <Text style={s.clearBoxConfirmText}>Clear</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
 
         {/* Attachment menu modal */}
         <Modal
@@ -1844,93 +1299,46 @@ const s = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10,
+    paddingHorizontal: 18, paddingTop: 6, paddingBottom: 8,
   },
-  headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-
-  // Avatar — outer ring + inner ring + gradient core
-  avatarOuter: {
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: `${C.verdigris}12`,
-    borderWidth: 1.5, borderColor: `${C.verdigris}35`,
+  headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  buddyRing: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: `${C.verdigris}14`,
     alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: `${C.verdigris}CC`,
+    shadowColor: C.verdigris, shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35, shadowRadius: 8, elevation: 4,
   },
-  avatarInner: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: `${C.verdigris}20`,
-    borderWidth: 1, borderColor: `${C.verdigris}55`,
-    alignItems: 'center', justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  avatarGrad: {
-    width: 38, height: 38, borderRadius: 19,
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  headerTitle: { color: C.white, fontSize: 17, fontWeight: '700', letterSpacing: -0.2 },
-  headerSubRow:{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
-  onlineDot:   { width: 6, height: 6, borderRadius: 3, backgroundColor: '#34C759' },
-  headerSub:   { color: C.textSec, fontSize: 11 },
-
+  buddyRingIcon: { color: C.verdigris, fontSize: 18 },
+  headerTitle:   { color: C.white, fontSize: 17, fontWeight: '700', letterSpacing: 0.2 },
+  headerSub:     { color: C.textSec, fontSize: 10, letterSpacing: 0.4, marginTop: 1 },
   speakingBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20,
-    backgroundColor: `${C.salmon}14`, borderWidth: 1, borderColor: `${C.salmon}35`,
+    paddingHorizontal: 11, paddingVertical: 5, borderRadius: 8,
+    backgroundColor: `${C.salmon}12`, borderWidth: 1, borderColor: `${C.salmon}28`,
   },
-  speakingBtnText: { color: C.salmon, fontSize: 12, fontWeight: '700' },
-
-  // Clear chat button
-  clearBtn: {
-    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20,
-    backgroundColor: C.surfaceEl, borderWidth: 1, borderColor: C.border,
-  },
-  clearBtnText: { color: C.textSec, fontSize: 12, fontWeight: '600' },
-
-  // Clear confirmation modal
-  clearOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.65)',
-    alignItems: 'center', justifyContent: 'center', padding: 32,
-  },
-  clearBox: {
-    backgroundColor: C.surfaceEl, borderRadius: 20,
-    padding: 24, width: '100%',
-    borderWidth: 1, borderColor: C.border,
-  },
-  clearBoxTitle: { color: C.white, fontSize: 17, fontWeight: '700', marginBottom: 8 },
-  clearBoxSub:   { color: C.textSec, fontSize: 14, lineHeight: 20, marginBottom: 24 },
-  clearBoxBtns:  { flexDirection: 'row', gap: 12 },
-  clearBoxCancel: {
-    flex: 1, paddingVertical: 13, borderRadius: 14,
-    backgroundColor: C.surfaceHi, alignItems: 'center',
-    borderWidth: 1, borderColor: C.border,
-  },
-  clearBoxCancelText: { color: C.textSec, fontSize: 14, fontWeight: '600' },
-  clearBoxConfirm: {
-    flex: 1, paddingVertical: 13, borderRadius: 14,
-    backgroundColor: C.crimson, alignItems: 'center',
-  },
-  clearBoxConfirmText: { color: C.white, fontSize: 14, fontWeight: '700' },
+  speakingBtnText: { color: C.salmon, fontSize: 12, fontWeight: '600' },
 
   // ── Status bar
   statusBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    paddingHorizontal: 16, paddingBottom: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 18, paddingBottom: 6,
   },
-  statusDot:  { width: 7, height: 7, borderRadius: 4 },
-  statusText: { color: C.textTer, fontSize: 11 },
+  statusDot:  { width: 6, height: 6, borderRadius: 3 },
+  statusText: { color: C.textTer, fontSize: 10, letterSpacing: 0.2 },
 
   // ── Messages
   msgList:   { paddingTop: 14, paddingBottom: 8 },
-  quickWrap: { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 2 },
-  quickLabel:{ color: C.textTer, fontSize: 9, fontWeight: '700', letterSpacing: 1.5, marginBottom: 8 },
-  quickRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  quickWrap: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 2 },
+  quickLabel:{ color: C.textTer, fontSize: 8, fontWeight: '700', letterSpacing: 2, marginBottom: 7 },
+  quickRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   chip: {
-    backgroundColor: C.surface, borderRadius: 999,
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: `${C.verdigris}0C`, borderRadius: 999,
+    paddingHorizontal: 13, paddingVertical: 6,
+    borderWidth: 1, borderColor: `${C.verdigris}28`,
   },
-  chipText: { color: C.textSec, fontSize: 12 },
+  chipText: { color: `${C.verdigris}CC`, fontSize: 11, fontWeight: '500' },
 
   // ── Confirmation bar
   confirmBar: {
@@ -1967,35 +1375,34 @@ const s = StyleSheet.create({
 
   // ── Input bar
   inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: 10,
-    paddingHorizontal: 14, paddingTop: 12, paddingBottom: 14,
-    backgroundColor: '#0F0F0F',
-    borderTopWidth: 1, borderTopColor: C.border,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderTopWidth: 1, borderColor: C.border,
+    backgroundColor: C.bg,
   },
   input: {
-    flex: 1, backgroundColor: C.surface, borderRadius: 26,
-    paddingHorizontal: 18, paddingVertical: 12,
-    color: C.white, fontSize: 15, maxHeight: 110, lineHeight: 20,
-    borderWidth: 1, borderColor: '#333333',
+    flex: 1, backgroundColor: C.surface, borderRadius: 20,
+    paddingHorizontal: 14, paddingVertical: 8,
+    color: C.white, fontSize: 14, maxHeight: 80,
+    borderWidth: 1, borderColor: `${C.verdigris}30`,
   },
   sendBtn: {
-    width: 46, height: 46, borderRadius: 23,
-    alignItems: 'center', justifyContent: 'center',
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: C.chartreuse,
-    elevation: 3,
-    shadowColor: C.chartreuse,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-  },
-
-  // ── Attach button — clean circle with verdigris + border
-  attachBtn: {
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: C.surface,
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: `${C.verdigris}45`,
+    shadowColor: C.chartreuse, shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4, shadowRadius: 6, elevation: 3,
   },
+  sendIcon: { color: C.bg, fontSize: 18, fontWeight: '700', lineHeight: 22 },
+
+  // ── Attach button
+  attachBtn: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: C.surfaceEl,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: C.border,
+  },
+  attachBtnText: { color: C.verdigris, fontSize: 20, lineHeight: 24, fontWeight: '300' },
 
   // ── Pending attachment preview strip
   attachPreviewBar: {
