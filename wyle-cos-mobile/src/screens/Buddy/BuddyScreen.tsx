@@ -321,28 +321,32 @@ function MessageBubble({ message }: { message: Message }) {
   );
 }
 const bub = StyleSheet.create({
-  userRow:    { alignItems: 'flex-end', marginBottom: 16, paddingHorizontal: 16 },
+  userRow:    { alignItems: 'flex-end', marginBottom: 14, paddingHorizontal: 16 },
   userBubble: {
-    backgroundColor: C.verdigris, borderRadius: 20, borderBottomRightRadius: 4,
-    padding: 14, maxWidth: width * 0.72,
+    backgroundColor: C.verdigris, borderRadius: 18, borderBottomRightRadius: 3,
+    paddingHorizontal: 14, paddingVertical: 11, maxWidth: width * 0.74,
+    shadowColor: C.verdigris, shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25, shadowRadius: 6, elevation: 3,
   },
-  userText:   { color: C.white, fontSize: 15, lineHeight: 21 },
-  buddyRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 16, paddingHorizontal: 16 },
+  userText:   { color: C.white, fontSize: 14, lineHeight: 20 },
+  buddyRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: 9, marginBottom: 14, paddingHorizontal: 14 },
   avatar:     {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: `${C.verdigris}18`,
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: `${C.verdigris}12`,
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: `${C.verdigris}35`,
-    marginTop: 18,
+    borderWidth: 1, borderColor: `${C.verdigris}40`,
+    marginTop: 16,
   },
-  avatarText: { color: C.verdigris, fontSize: 14 },
-  buddyLabel: { color: C.verdigris, fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginBottom: 4 },
+  avatarText: { color: C.verdigris, fontSize: 12 },
+  buddyLabel: { color: `${C.verdigris}BB`, fontSize: 8, fontWeight: '800', letterSpacing: 2, marginBottom: 4 },
   buddyBubble:{
-    backgroundColor: C.surface, borderRadius: 20, borderBottomLeftRadius: 4,
-    padding: 14, maxWidth: width * 0.72, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surface, borderRadius: 18, borderBottomLeftRadius: 3,
+    paddingHorizontal: 14, paddingVertical: 11, maxWidth: width * 0.74,
+    borderWidth: 1, borderColor: `${C.verdigris}18`,
+    borderLeftWidth: 2, borderLeftColor: `${C.verdigris}55`,
   },
-  buddyText:  { color: C.white, fontSize: 15, lineHeight: 22 },
-  time:       { color: C.textTer, fontSize: 10, marginTop: 4 },
+  buddyText:  { color: C.white, fontSize: 14, lineHeight: 21 },
+  time:       { color: C.textTer, fontSize: 9, marginTop: 3, letterSpacing: 0.2 },
   // Attachment styles
   attachImage: {
     width: '100%', height: 180, borderRadius: 12,
@@ -1295,44 +1299,46 @@ const s = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10,
+    paddingHorizontal: 18, paddingTop: 6, paddingBottom: 8,
   },
-  headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: 11 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   buddyRing: {
-    width: 42, height: 42, borderRadius: 21,
-    backgroundColor: `${C.verdigris}18`,
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: `${C.verdigris}14`,
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: C.verdigris,
+    borderWidth: 1.5, borderColor: `${C.verdigris}CC`,
+    shadowColor: C.verdigris, shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35, shadowRadius: 8, elevation: 4,
   },
-  buddyRingIcon: { color: C.verdigris, fontSize: 20 },
-  headerTitle:   { color: C.white, fontSize: 18, fontWeight: '700' },
-  headerSub:     { color: C.textSec, fontSize: 11 },
+  buddyRingIcon: { color: C.verdigris, fontSize: 18 },
+  headerTitle:   { color: C.white, fontSize: 17, fontWeight: '700', letterSpacing: 0.2 },
+  headerSub:     { color: C.textSec, fontSize: 10, letterSpacing: 0.4, marginTop: 1 },
   speakingBtn: {
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
-    backgroundColor: `${C.salmon}14`, borderWidth: 1, borderColor: `${C.salmon}30`,
+    paddingHorizontal: 11, paddingVertical: 5, borderRadius: 8,
+    backgroundColor: `${C.salmon}12`, borderWidth: 1, borderColor: `${C.salmon}28`,
   },
-  speakingBtnText: { color: C.salmon, fontSize: 13, fontWeight: '600' },
+  speakingBtnText: { color: C.salmon, fontSize: 12, fontWeight: '600' },
 
   // ── Status bar
   statusBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    paddingHorizontal: 16, paddingBottom: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 18, paddingBottom: 6,
   },
-  statusDot:  { width: 7, height: 7, borderRadius: 4 },
-  statusText: { color: C.textTer, fontSize: 11 },
+  statusDot:  { width: 6, height: 6, borderRadius: 3 },
+  statusText: { color: C.textTer, fontSize: 10, letterSpacing: 0.2 },
 
   // ── Messages
   msgList:   { paddingTop: 14, paddingBottom: 8 },
-  quickWrap: { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 2 },
-  quickLabel:{ color: C.textTer, fontSize: 9, fontWeight: '700', letterSpacing: 1.5, marginBottom: 8 },
-  quickRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  quickWrap: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 2 },
+  quickLabel:{ color: C.textTer, fontSize: 8, fontWeight: '700', letterSpacing: 2, marginBottom: 7 },
+  quickRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   chip: {
-    backgroundColor: C.surface, borderRadius: 999,
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: `${C.verdigris}0C`, borderRadius: 999,
+    paddingHorizontal: 13, paddingVertical: 6,
+    borderWidth: 1, borderColor: `${C.verdigris}28`,
   },
-  chipText: { color: C.textSec, fontSize: 12 },
+  chipText: { color: `${C.verdigris}CC`, fontSize: 11, fontWeight: '500' },
 
   // ── Confirmation bar
   confirmBar: {
@@ -1369,27 +1375,34 @@ const s = StyleSheet.create({
 
   // ── Input bar
   inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: 8,
-    paddingHorizontal: 12, paddingVertical: 10,
-    borderTopWidth: 1, borderColor: C.border, backgroundColor: C.bg,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderTopWidth: 1, borderColor: C.border,
+    backgroundColor: C.bg,
   },
   input: {
-    flex: 1, backgroundColor: C.surface, borderRadius: 22,
-    paddingHorizontal: 16, paddingVertical: 11,
-    color: C.white, fontSize: 15, maxHeight: 100,
-    borderWidth: 1, borderColor: C.border,
+    flex: 1, backgroundColor: C.surface, borderRadius: 20,
+    paddingHorizontal: 14, paddingVertical: 8,
+    color: C.white, fontSize: 14, maxHeight: 80,
+    borderWidth: 1, borderColor: `${C.verdigris}30`,
   },
-  sendBtn:  { width: 44, height: 44, borderRadius: 22, backgroundColor: C.chartreuse, alignItems: 'center', justifyContent: 'center' },
-  sendIcon: { color: C.bg, fontSize: 22, fontWeight: '700', lineHeight: 26 },
+  sendBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: C.chartreuse,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: C.chartreuse, shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4, shadowRadius: 6, elevation: 3,
+  },
+  sendIcon: { color: C.bg, fontSize: 18, fontWeight: '700', lineHeight: 22 },
 
   // ── Attach button
   attachBtn: {
-    width: 40, height: 40, borderRadius: 12,
+    width: 36, height: 36, borderRadius: 10,
     backgroundColor: C.surfaceEl,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: C.border,
   },
-  attachBtnText: { color: C.verdigris, fontSize: 22, lineHeight: 26, fontWeight: '300' },
+  attachBtnText: { color: C.verdigris, fontSize: 20, lineHeight: 24, fontWeight: '300' },
 
   // ── Pending attachment preview strip
   attachPreviewBar: {
