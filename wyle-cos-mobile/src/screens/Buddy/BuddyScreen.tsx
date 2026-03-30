@@ -1045,8 +1045,13 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       <SafeAreaView edges={['top']}>
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <View style={s.header}>
-          {/* Buddy identity */}
-          <View style={s.headerLeft}>
+          {/* Left: back arrow */}
+          <TouchableOpacity style={s.backBtn} onPress={() => nav.goBack()}>
+            <Text style={s.backIcon}>‹</Text>
+          </TouchableOpacity>
+
+          {/* Centre: Buddy identity */}
+          <View style={s.headerCenter}>
             <View style={s.buddyRing}>
               <Text style={s.buddyRingIcon}>◎</Text>
             </View>
@@ -1056,13 +1061,26 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
             </View>
           </View>
 
-          {/* Right controls */}
+          {/* Right: Clear + Stop speaking + Mic */}
           <View style={s.headerRight}>
             {isSpeaking && (
               <TouchableOpacity style={s.speakingBtn} onPress={stopSpeaking}>
                 <Text style={s.speakingBtnText}>⏸ Stop</Text>
               </TouchableOpacity>
             )}
+            <TouchableOpacity
+              style={s.clearBtn}
+              onPress={() => {
+                setMessages([{
+                  id: '0', role: 'buddy',
+                  text: "Hey! I'm Buddy — your personal chief of staff. 👋\n\nYou have 2 urgent items today: your UAE visa expires in 8 days and your school fee of AED 14,000 is due today.\n\nTap 🎙️ to talk, or type below.",
+                  timestamp: new Date(),
+                }]);
+                setShowQuick(true);
+              }}
+            >
+              <Text style={s.clearBtnText}>Clear</Text>
+            </TouchableOpacity>
             <MicButton voiceState={voiceState} onPress={handleVoicePress} />
           </View>
         </View>
@@ -1283,8 +1301,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         </Modal>
       </KeyboardAvoidingView>
 
-      {/* ── Tab Bar ─────────────────────────────────────────────────────────── */}
-      <TabBar active="buddy" onTab={(sc) => nav.navigate(sc)} />
+      {/* Tab bar removed — back arrow in header handles navigation */}
     </View>
   );
 }
@@ -1299,21 +1316,37 @@ const s = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18, paddingTop: 6, paddingBottom: 8,
+    paddingHorizontal: 12, paddingTop: 6, paddingBottom: 8,
+  },
+  backBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: C.surfaceEl,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: C.border,
+  },
+  backIcon: { color: C.white, fontSize: 26, lineHeight: 30, fontWeight: '300', marginLeft: -2 },
+  headerCenter: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', gap: 9,
   },
   headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: 11 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   buddyRing: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: `${C.verdigris}14`,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1.5, borderColor: `${C.verdigris}CC`,
     shadowColor: C.verdigris, shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.35, shadowRadius: 8, elevation: 4,
   },
-  buddyRingIcon: { color: C.verdigris, fontSize: 18 },
-  headerTitle:   { color: C.white, fontSize: 17, fontWeight: '700', letterSpacing: 0.2 },
+  buddyRingIcon: { color: C.verdigris, fontSize: 16 },
+  headerTitle:   { color: C.white, fontSize: 16, fontWeight: '700', letterSpacing: 0.2 },
   headerSub:     { color: C.textSec, fontSize: 10, letterSpacing: 0.4, marginTop: 1 },
+  clearBtn: {
+    paddingHorizontal: 11, paddingVertical: 5, borderRadius: 8,
+    backgroundColor: C.surfaceEl, borderWidth: 1, borderColor: C.border,
+  },
+  clearBtnText: { color: C.textSec, fontSize: 12, fontWeight: '600' },
   speakingBtn: {
     paddingHorizontal: 11, paddingVertical: 5, borderRadius: 8,
     backgroundColor: `${C.salmon}12`, borderWidth: 1, borderColor: `${C.salmon}28`,
