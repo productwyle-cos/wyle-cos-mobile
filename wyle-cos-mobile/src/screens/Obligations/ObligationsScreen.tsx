@@ -114,6 +114,204 @@ function getDaysLabel(days: number): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Rule-based Voice Brain Dump Parser — no Claude API needed
+// Produces the same output format as the Claude path so the rest of the
+// BrainDumpModal flow (conflict checks, review, save) works unchanged.
+// ─────────────────────────────────────────────────────────────────────────────
+type BrainDumpResult =
+  | { intent: 'tasks'; items: any[] }
+  | { intent: 'calendar_query'; start: string; end: string; label: string };
+
+const VOICE_MONTHS: Record<string, number> = {
+  january:0, february:1, march:2, april:3, may:4, june:5,
+  july:6, august:7, september:8, october:9, november:10, december:11,
+  jan:0, feb:1, mar:2, apr:3, jun:5, jul:6, aug:7, sep:8, sept:8, oct:9, nov:10, dec:11,
+};
+
+function resolveVoiceDate(text: string): { date: Date; label: string } | null {
+  const t = text.toLowerCase();
+  const now = new Date();
+
+  if (/\btoday\b/.test(t))    return { date: new Date(now), label: 'Today' };
+  if (/\btomorrow\b/.test(t)) { const d = new Date(now); d.setDate(d.getDate()+1); return { date: d, label: 'Tomorrow' }; }
+  if (/\bthis weekend\b/.test(t)) {
+    const d = new Date(now); d.setDate(d.getDate() + (6 - d.getDay()));
+    return { date: d, label: 'This weekend' };
+  }
+  if (/\bnext week\b/.test(t)) { const d = new Date(now); d.setDate(d.getDate()+7); return { date: d, label: 'Next week' }; }
+
+  // Named day — "Saturday", "next Monday", etc.
+  const DAYS_LIST = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  for (let i = 0; i < DAYS_LIST.length; i++) {
+    if (t.includes(DAYS_LIST[i])) {
+      const d = new Date(now);
+      let diff = i - d.getDay();
+      if (diff <= 0) diff += 7;
+      d.setDate(d.getDate() + diff);
+      return { date: d, label: DAYS_LIST[i].charAt(0).toUpperCase() + DAYS_LIST[i].slice(1) };
+    }
+  }
+
+  // "in X days"
+  const inDays = t.match(/in (\d+) days?/);
+  if (inDays) { const d = new Date(now); d.setDate(d.getDate()+parseInt(inDays[1])); return { date: d, label: `In ${inDays[1]} days` }; }
+
+  // Month-name dates: "April 5", "5th April 2026"
+  for (const [name, mo] of Object.entries(VOICE_MONTHS)) {
+    const r1 = new RegExp(`\\b${name}\\s+(\\d{1,2})`, 'i');
+    const r2 = new RegExp(`(\\d{1,2})(?:st|nd|rd|th)?\\s+${name}`, 'i');
+    const m1 = text.match(r1); const m2 = text.match(r2);
+    const day = m1 ? parseInt(m1[1]) : m2 ? parseInt(m2[1]) : 0;
+    if (day) {
+      const yr  = now.getFullYear();
+      const d   = new Date(yr, mo, day);
+      if (d < now) d.setFullYear(yr + 1);
+      return { date: d, label: `${name.charAt(0).toUpperCase()+name.slice(1)} ${day}` };
+    }
+  }
+  return null;
+}
+
+function resolveVoiceTime(text: string): { hours: number; minutes: number } | null {
+  const t = text.toLowerCase();
+  if (/\bnoon\b/.test(t))        return { hours: 12, minutes: 0 };
+  if (/\bmidnight\b/.test(t))    return { hours: 0,  minutes: 0 };
+  if (/\bmorning\b/.test(t))     return { hours: 9,  minutes: 0 };
+  if (/\bafternoon\b/.test(t))   return { hours: 14, minutes: 0 };
+  if (/\bevening\b/.test(t))     return { hours: 18, minutes: 0 };
+  if (/\bnight\b/.test(t))       return { hours: 20, minutes: 0 };
+
+  // "at 7pm", "at 7:30 pm", "7pm", "7:30pm"
+  const m = t.match(/(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/);
+  if (m) {
+    let h = parseInt(m[1]);
+    const min = parseInt(m[2] ?? '0');
+    if (m[3] === 'pm' && h !== 12) h += 12;
+    if (m[3] === 'am' && h === 12) h = 0;
+    return { hours: h, minutes: min };
+  }
+  // "at 7" without am/pm — assume PM for afternoon/evening numbers
+  const bare = t.match(/\bat (\d{1,2})(?::(\d{2}))?\b/);
+  if (bare) {
+    let h = parseInt(bare[1]);
+    const min = parseInt(bare[2] ?? '0');
+    if (h >= 1 && h <= 6) h += 12; // 1–6 → PM
+    return { hours: h, minutes: min };
+  }
+  return null;
+}
+
+function buildScheduledISO(dateRes: { date: Date } | null, timeRes: { hours: number; minutes: number } | null): string | null {
+  if (!dateRes && !timeRes) return null;
+  const base = dateRes ? new Date(dateRes.date) : new Date();
+  if (timeRes) base.setHours(timeRes.hours, timeRes.minutes, 0, 0);
+  else base.setHours(9, 0, 0, 0); // default 9 AM if only date given
+  return base.toISOString();
+}
+
+function detectVoiceObligationType(text: string): { type: string; emoji: string } {
+  const t = text.toLowerCase();
+  if (/\bvisa\b|residence permit|gdrfa/.test(t))                                   return { type: 'visa',             emoji: '🛂' };
+  if (/emirates id|identity card/.test(t))                                         return { type: 'emirates_id',      emoji: '🪪' };
+  if (/car.*registr|vehicle.*registr|mulkiya|\brta\b/.test(t))                     return { type: 'car_registration', emoji: '🚗' };
+  if (/\binsurance\b|policy renewal/.test(t))                                      return { type: 'insurance',        emoji: '🛡️' };
+  if (/school fee|tuition|university fee/.test(t))                                 return { type: 'school_fee',       emoji: '🎓' };
+  if (/\bdewa\b|\bsewa\b|electricity.*bill|water.*bill|utility.*bill/.test(t))     return { type: 'bill',             emoji: '💡' };
+  if (/invoice|\bpay\b(?!ment)|\bpaid\b|amount.*owed|aed\s*\d/.test(t))           return { type: 'payment',          emoji: '💰' };
+  if (/doctor|dentist|hospital|clinic|medical|health check|checkup/.test(t))       return { type: 'medical',          emoji: '🏥' };
+  if (/subscription|renew|renewal/.test(t))                                        return { type: 'subscription',     emoji: '🔄' };
+  if (/meeting|call|interview|presentation|conference|standup/.test(t))            return { type: 'appointment',      emoji: '📅' };
+  if (/party|birthday|dinner|lunch|breakfast|brunch|wedding|attend|event|visit/.test(t)) return { type: 'appointment', emoji: '🎉' };
+  if (/appointment|book|schedule/.test(t))                                         return { type: 'appointment',      emoji: '📅' };
+  return { type: 'task', emoji: '📌' };
+}
+
+function extractVoiceAmount(text: string): number | null {
+  const m = text.match(/(?:aed|AED)\s*([\d,]+(?:\.\d{1,2})?)/i)
+         ?? text.match(/([\d,]+(?:\.\d{1,2})?)\s*(?:aed|dirhams?)/i)
+         ?? text.match(/\bpay\s+([\d,]+(?:\.\d{1,2})?)\b/i);
+  if (m) { const n = parseFloat(m[1].replace(/,/g, '')); if (n > 0 && n < 10_000_000) return n; }
+  return null;
+}
+
+function cleanVoiceTitle(segment: string): string {
+  return segment
+    .replace(/^(i need to|i have to|i should|remind me to|don'?t forget to|remember to|make sure to|please|can you|could you)\s+/i, '')
+    .replace(/\bat \d{1,2}(:\d{2})?\s*(am|pm)?\b/gi, '')
+    .replace(/\b(today|tomorrow|this weekend|next week|next month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, '')
+    .replace(/\bin \d+ days?\b/i, '')
+    .replace(/\bfor \d+ (minutes?|hours?|mins?|hrs?)\b/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function isCalendarQueryText(text: string): boolean {
+  return /\b(what|do i have|show me|list|tell me|any)\b.*(meeting|event|appointment|schedule|calendar|plan)/i.test(text)
+    || /\bmy (schedule|calendar|meetings|events|appointments)\b/i.test(text);
+}
+
+function splitVoiceSegments(text: string): string[] {
+  // Split on "and also", "also,", " and ", comma-and patterns
+  const parts = text.split(/,?\s+and also\s+|,?\s+also\s+|;\s*|\s*,\s+(?=[a-z])/i)
+    .map(s => s.trim()).filter(s => s.split(' ').length >= 2);
+  return parts.length > 0 ? parts : [text];
+}
+
+/** Pure rule-based fallback — same output shape as Claude response */
+function parseVoiceWithRules(text: string): BrainDumpResult {
+  // ── Calendar query ───────────────────────────────────────────────────────
+  if (isCalendarQueryText(text)) {
+    const dateRes = resolveVoiceDate(text);
+    const base    = dateRes ? dateRes.date : new Date();
+    const start   = new Date(base); start.setHours(0, 0, 0, 0);
+    const end     = new Date(base); end.setHours(23, 59, 59, 999);
+    return { intent: 'calendar_query', start: start.toISOString(), end: end.toISOString(), label: dateRes?.label ?? 'Today' };
+  }
+
+  // ── Task creation ────────────────────────────────────────────────────────
+  const segments = splitVoiceSegments(text);
+  const items: any[] = segments.map((seg, i) => {
+    const { type, emoji }   = detectVoiceObligationType(seg);
+    const dateRes           = resolveVoiceDate(seg);
+    const timeRes           = resolveVoiceTime(seg);
+    const amount            = extractVoiceAmount(seg);
+    const scheduledDateTime = buildScheduledISO(dateRes, timeRes);
+
+    let daysUntil = 0;
+    if (dateRes) daysUntil = Math.max(0, Math.round((dateRes.date.getTime() - Date.now()) / 86_400_000));
+
+    const risk: 'high' | 'medium' | 'low' = daysUntil <= 1 ? 'high' : daysUntil <= 7 ? 'medium' : 'low';
+    const rawTitle  = cleanVoiceTitle(seg);
+    const title     = rawTitle.charAt(0).toUpperCase() + rawTitle.slice(1) || `${type.replace(/_/g,' ')} task`;
+
+    let executionPath = '';
+    if (scheduledDateTime) {
+      const dt = new Date(scheduledDateTime);
+      const fmt = dt.toLocaleString('en-AE', { weekday:'short', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+      executionPath = `Scheduled for ${fmt}`;
+    } else if (type === 'payment') {
+      executionPath = `Process payment${amount ? ` of AED ${amount.toLocaleString()}` : ''}`;
+    } else {
+      executionPath = `Handle: ${title}`;
+    }
+
+    return {
+      _id:              `dump_${i}_${Date.now()}`,
+      emoji, title, type,
+      daysUntil, risk,
+      amount:           amount ?? null,
+      status:           'active',
+      executionPath,
+      notes:            'via voice brain dump',
+      scheduledDateTime,
+      scheduledDuration: scheduledDateTime ? 60 : null,
+    };
+  }).filter(item => item.title.length > 1);
+
+  return { intent: 'tasks', items };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Animated Hologram Orb — exact copy from HomeScreen
 // ─────────────────────────────────────────────────────────────────────────────
 const ORB_SIZE = 58;
@@ -654,10 +852,77 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
     }
   };
 
+  // ── Shared handler: takes a parsed BrainDumpResult and updates UI state ──
+  const applyParsedResponse = async (response: BrainDumpResult) => {
+    // ── Calendar query mode ─────────────────────────────────────────────────
+    if (response.intent === 'calendar_query') {
+      setVoiceMode('calendar_query');
+      setCalendarQueryLabel(response.label ?? '');
+      const start  = new Date(response.start);
+      const end    = new Date(response.end);
+      const result = await fetchEventsForDateRange(start, end);
+      setCalendarEvents(result.events);
+      setVoiceState('done');
+      const n = result.events.length;
+      Speech.speak(
+        n > 0
+          ? `You have ${n} ${n === 1 ? 'meeting' : 'meetings'} for ${response.label}.`
+          : `No meetings found for ${response.label}.`,
+        { language: 'en-US', rate: 0.95 },
+      );
+      return;
+    }
+
+    // ── Task creation mode ──────────────────────────────────────────────────
+    setVoiceMode('task_creation');
+    const items: UIObligation[] = response.items ?? [];
+    const stamped = items.map((item: UIObligation, i: number) => ({ ...item, _id: `dump_${i}_${Date.now()}` }));
+    setParsed(stamped);
+    setVoiceState('done');
+
+    // ── Run conflict + overload checks in parallel ────────────────────────
+    const [, overloadMap] = await Promise.all([
+      checkCalendarConflicts(stamped),
+      (async () => {
+        const map: Record<string, { count: number; events: CalendarEvent[] }> = {};
+        await Promise.all(
+          stamped.map(async (item: UIObligation) => {
+            const dt = (item as any).scheduledDateTime;
+            if (!dt) return;
+            const date = new Date(dt);
+            if (isNaN(date.getTime())) return;
+            const result = await detectDayOverload(date);
+            if (result.isOverloaded) map[item._id] = { count: result.count, events: result.events };
+          })
+        );
+        return map;
+      })(),
+    ]);
+    setOverloadWarnings(overloadMap);
+
+    const overloadCount = Object.keys(overloadMap).length;
+    if (stamped.length > 0) {
+      const parts: string[] = [`Found ${stamped.length} ${stamped.length === 1 ? 'task' : 'tasks'}.`];
+      if (overloadCount > 0) parts.push(`Warning — ${overloadCount} ${overloadCount === 1 ? 'task is' : 'tasks are'} scheduled on overloaded days with ${OVERLOAD_THRESHOLD} or more existing meetings.`);
+      Speech.speak(parts.join(' '), { language: 'en-US', rate: 0.95 });
+    }
+  };
+
   const parseWithClaude = async (text: string) => {
     setVoiceState('parsing');
     setConflictWarnings(new Map());
     setOverloadWarnings({});
+
+    // ── No API key → skip straight to rule-based ─────────────────────────
+    if (!ANTHROPIC_API_KEY) {
+      try {
+        await applyParsedResponse(parseVoiceWithRules(text));
+      } catch {
+        setVoiceState('error');
+      }
+      return;
+    }
+
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -674,70 +939,41 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
           messages: [{ role: 'user', content: text }],
         }),
       });
-      const data  = await res.json();
+
+      // ── API error (low credits, bad key, rate limit) → rule-based ────────
+      if (!res.ok) {
+        console.warn(`[BrainDump] Claude API ${res.status} — using rule-based parser`);
+        await applyParsedResponse(parseVoiceWithRules(text));
+        return;
+      }
+
+      const data = await res.json();
+
+      // ── Body-level error (quota exhausted, etc.) → rule-based ─────────────
+      if (data.error || !data.content) {
+        console.warn('[BrainDump] Claude quota/error — using rule-based parser');
+        await applyParsedResponse(parseVoiceWithRules(text));
+        return;
+      }
+
       const raw   = data.content?.[0]?.text ?? '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
       const parsed_json = JSON.parse(clean);
 
       // Support legacy plain array + new {intent} format
-      const response = Array.isArray(parsed_json)
+      const response: BrainDumpResult = Array.isArray(parsed_json)
         ? { intent: 'tasks', items: parsed_json }
         : parsed_json;
 
-      // ── Calendar query mode ───────────────────────────────────────────────
-      if (response.intent === 'calendar_query') {
-        setVoiceMode('calendar_query');
-        setCalendarQueryLabel(response.label ?? '');
-        const start  = new Date(response.start);
-        const end    = new Date(response.end);
-        const result = await fetchEventsForDateRange(start, end);
-        setCalendarEvents(result.events);
-        setVoiceState('done');
-        const n = result.events.length;
-        Speech.speak(
-          n > 0
-            ? `You have ${n} ${n === 1 ? 'meeting' : 'meetings'} for ${response.label}.`
-            : `No meetings found for ${response.label}.`,
-          { language: 'en-US', rate: 0.95 },
-        );
-        return;
-      }
-
-      // ── Task creation mode ────────────────────────────────────────────────
-      setVoiceMode('task_creation');
-      const items: UIObligation[] = response.items ?? [];
-      const stamped = items.map((item: UIObligation, i: number) => ({ ...item, _id: `dump_${i}_${Date.now()}` }));
-      setParsed(stamped);
-      setVoiceState('done');
-
-      // ── Run conflict + overload checks in parallel ──────────────────────────
-      const [, overloadMap] = await Promise.all([
-        checkCalendarConflicts(stamped),
-        (async () => {
-          const map: Record<string, { count: number; events: CalendarEvent[] }> = {};
-          await Promise.all(
-            stamped.map(async (item: UIObligation) => {
-              const dt = (item as any).scheduledDateTime;
-              if (!dt) return;
-              const date = new Date(dt);
-              if (isNaN(date.getTime())) return;
-              const result = await detectDayOverload(date);
-              if (result.isOverloaded) map[item._id] = { count: result.count, events: result.events };
-            })
-          );
-          return map;
-        })(),
-      ]);
-      setOverloadWarnings(overloadMap);
-
-      const overloadCount = Object.keys(overloadMap).length;
-      if (stamped.length > 0) {
-        const parts: string[] = [`Found ${stamped.length} ${stamped.length === 1 ? 'task' : 'tasks'}.`];
-        if (overloadCount > 0) parts.push(`Warning — ${overloadCount} ${overloadCount === 1 ? 'task is' : 'tasks are'} scheduled on overloaded days with ${OVERLOAD_THRESHOLD} or more existing meetings.`);
-        Speech.speak(parts.join(' '), { language: 'en-US', rate: 0.95 });
-      }
+      await applyParsedResponse(response);
     } catch {
-      setVoiceState('error');
+      // Network error / JSON parse failure → rule-based fallback
+      console.warn('[BrainDump] Claude call failed — using rule-based parser');
+      try {
+        await applyParsedResponse(parseVoiceWithRules(text));
+      } catch {
+        setVoiceState('error');
+      }
     }
   };
 
