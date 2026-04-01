@@ -173,7 +173,11 @@ function resolveVoiceDate(text: string): { date: Date; label: string } | null {
 }
 
 function resolveVoiceTime(text: string): { hours: number; minutes: number } | null {
-  const t = text.toLowerCase();
+  // Normalise "p.m." → "pm", "a.m." → "am" (spoken/typed with dots)
+  const t = text.toLowerCase()
+    .replace(/p\s*\.\s*m\s*\.?/g, 'pm')
+    .replace(/a\s*\.\s*m\s*\.?/g, 'am');
+
   if (/\bnoon\b/.test(t))        return { hours: 12, minutes: 0 };
   if (/\bmidnight\b/.test(t))    return { hours: 0,  minutes: 0 };
   if (/\bmorning\b/.test(t))     return { hours: 9,  minutes: 0 };
@@ -190,12 +194,12 @@ function resolveVoiceTime(text: string): { hours: number; minutes: number } | nu
     if (m[3] === 'am' && h === 12) h = 0;
     return { hours: h, minutes: min };
   }
-  // "at 7" without am/pm — assume PM for afternoon/evening numbers
+  // "at 7" without am/pm — assume PM for 1–6
   const bare = t.match(/\bat (\d{1,2})(?::(\d{2}))?\b/);
   if (bare) {
     let h = parseInt(bare[1]);
     const min = parseInt(bare[2] ?? '0');
-    if (h >= 1 && h <= 6) h += 12; // 1–6 → PM
+    if (h >= 1 && h <= 6) h += 12;
     return { hours: h, minutes: min };
   }
   return null;
@@ -236,11 +240,19 @@ function extractVoiceAmount(text: string): number | null {
 
 function cleanVoiceTitle(segment: string): string {
   return segment
-    .replace(/^(i need to|i have to|i should|remind me to|don'?t forget to|remember to|make sure to|please|can you|could you)\s+/i, '')
-    .replace(/\bat \d{1,2}(:\d{2})?\s*(am|pm)?\b/gi, '')
+    // Strip conversational openers — "hey buddy", "ok so", "hey", etc.
+    .replace(/^(hey\s+buddy|hey\s+wyle|hey\s+there|ok\s+so|okay\s+so|so\s+basically|alright|ok|okay|hi|hello)\s*/i, '')
+    // Strip task-creation filler anywhere in the sentence
+    .replace(/\b(i need to|i have to|i should|remind me to|don'?t forget to|remember to|make sure to|please|can you|could you)\s+/i, '')
+    // Remove time expressions (handle "p.m." dots too)
+    .replace(/\bat \d{1,2}(:\d{2})?\s*(a\.?m\.?|p\.?m\.?)?\b/gi, '')
+    .replace(/\b\d{1,2}(:\d{2})?\s*(a\.?m\.?|p\.?m\.?)\b/gi, '')
+    // Remove relative date words
     .replace(/\b(today|tomorrow|this weekend|next week|next month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, '')
     .replace(/\bin \d+ days?\b/i, '')
     .replace(/\bfor \d+ (minutes?|hours?|mins?|hrs?)\b/i, '')
+    // Clean leftover punctuation and whitespace
+    .replace(/[,;]\s*$/, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
