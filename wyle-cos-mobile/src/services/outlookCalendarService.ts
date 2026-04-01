@@ -122,6 +122,48 @@ export async function sendOutlookEmail(
   return res.ok || res.status === 202;
 }
 
+// ── Fetch recent Outlook email snippets (Microsoft Graph) ─────────────────────
+/**
+ * Fetches up to 20 email metadata snippets from Outlook for a specific account.
+ * Reads subject, from, receivedDateTime, and bodyPreview only (no full bodies).
+ * Exported so signalService can call it directly if needed.
+ */
+export async function fetchOutlookRecentEmails(accountEmail: string): Promise<string[]> {
+  const token = await getAccessTokenForOutlookEmail(accountEmail);
+  if (!token) return [];
+
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const params = new URLSearchParams({
+    '$top':     '20',
+    '$select':  'subject,from,receivedDateTime,bodyPreview',
+    '$filter':  `receivedDateTime ge ${since}`,
+    '$orderby': 'receivedDateTime desc',
+  });
+
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages?${params}`,
+    {
+      headers: {
+        Authorization:  `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    },
+  );
+  if (!res.ok) return [];
+
+  const data = await res.json();
+  const messages: any[] = data.value ?? [];
+
+  return messages
+    .map(msg => {
+      const from    = msg.from?.emailAddress?.address ?? msg.from?.emailAddress?.name ?? '';
+      const subject = msg.subject ?? '';
+      const snippet = msg.bodyPreview ?? '';
+      return `FROM: ${from}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`;
+    })
+    .filter(s => s.length > 20);
+}
+
 // ── Cancel (delete) an Outlook calendar event ─────────────────────────────────
 export async function cancelOutlookCalendarEvent(
   accountEmail: string,
