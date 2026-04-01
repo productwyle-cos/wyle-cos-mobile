@@ -363,41 +363,93 @@ const bub = StyleSheet.create({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mic button with animated ring
+// Mic button — gradient circle with animated outer ring
 // ─────────────────────────────────────────────────────────────────────────────
 function MicButton({ voiceState, onPress }: { voiceState: VoiceState; onPress: () => void }) {
-  const pulse = useRef(new Animated.Value(1)).current;
+  const pulse       = useRef(new Animated.Value(1)).current;
+  const ringOpacity = useRef(new Animated.Value(0)).current;
+  const ringScale   = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (voiceState === 'recording') {
+      Animated.timing(ringOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
       Animated.loop(Animated.sequence([
-        Animated.timing(pulse, { toValue: 1.3, duration: 600, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 1,   duration: 600, useNativeDriver: true }),
+        Animated.parallel([
+          Animated.timing(pulse,      { toValue: 1.1,  duration: 650, useNativeDriver: true }),
+          Animated.timing(ringScale,  { toValue: 1.35, duration: 650, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(pulse,      { toValue: 1,    duration: 650, useNativeDriver: true }),
+          Animated.timing(ringScale,  { toValue: 1,    duration: 650, useNativeDriver: true }),
+        ]),
       ])).start();
     } else {
-      pulse.stopAnimation();
-      pulse.setValue(1);
+      pulse.stopAnimation();      pulse.setValue(1);
+      ringScale.stopAnimation();  ringScale.setValue(1);
+      Animated.timing(ringOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start();
     }
   }, [voiceState]);
 
   const isRecording    = voiceState === 'recording';
   const isTranscribing = voiceState === 'transcribing';
-  const bgColor     = isRecording ? `${C.salmon}28` : isTranscribing ? `${C.chartreuse}18` : `${C.salmon}14`;
-  const borderColor = isRecording ? C.salmon : isTranscribing ? C.chartreuse : `${C.salmon}38`;
 
   return (
-    <TouchableOpacity onPress={onPress} disabled={isTranscribing}>
-      <Animated.View style={[mic.btn, { backgroundColor: bgColor, borderColor, transform: [{ scale: pulse }] }]}>
-        {isTranscribing
-          ? <ActivityIndicator color={C.chartreuse} size="small" />
-          : <Text style={{ fontSize: 18 }}>{isRecording ? '⏹️' : '🎙️'}</Text>
-        }
+    <TouchableOpacity onPress={onPress} disabled={isTranscribing} activeOpacity={0.8} style={mic.wrap}>
+      {/* Outer pulse ring (recording only) */}
+      <Animated.View style={[
+        mic.ring,
+        { opacity: ringOpacity, transform: [{ scale: ringScale }] },
+      ]} />
+
+      <Animated.View style={{ transform: [{ scale: pulse }] }}>
+        {isTranscribing ? (
+          <View style={mic.btnProcessing}>
+            <ActivityIndicator color={C.chartreuse} size="small" />
+          </View>
+        ) : isRecording ? (
+          <View style={mic.btnRecording}>
+            <View style={mic.stopSquare} />
+          </View>
+        ) : (
+          <LinearGradient
+            colors={[C.verdigris, '#0fd4a8']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={mic.btnIdle}
+          >
+            <Text style={mic.micIcon}>🎙</Text>
+          </LinearGradient>
+        )}
       </Animated.View>
     </TouchableOpacity>
   );
 }
 const mic = StyleSheet.create({
-  btn: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  wrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  ring: {
+    position: 'absolute', width: 54, height: 54, borderRadius: 27,
+    borderWidth: 2, borderColor: C.salmon, opacity: 0,
+  },
+  btnIdle: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: C.verdigris, shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.55, shadowRadius: 10, elevation: 7,
+  },
+  btnRecording: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: C.salmon,
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: C.salmon, shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.55, shadowRadius: 10, elevation: 7,
+  },
+  btnProcessing: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: `${C.chartreuse}22`,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: `${C.chartreuse}60`,
+  },
+  micIcon:   { fontSize: 20 },
+  stopSquare:{ width: 14, height: 14, borderRadius: 3, backgroundColor: C.white },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1045,24 +1097,36 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
       <SafeAreaView edges={['top']}>
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <View style={s.header}>
-          {/* Buddy identity */}
-          <View style={s.headerLeft}>
-            <View style={s.buddyRing}>
-              <Text style={s.buddyRingIcon}>◎</Text>
-            </View>
-            <View>
-              <Text style={s.headerTitle}>Buddy</Text>
-              <Text style={s.headerSub}>Personal Chief of Staff</Text>
-            </View>
+          {/* Left: back arrow */}
+          <TouchableOpacity style={s.backBtn} onPress={() => nav.goBack()}>
+            <Text style={s.backIcon}>‹</Text>
+          </TouchableOpacity>
+
+          {/* Centre: title only, no ring */}
+          <View style={s.headerCenter}>
+            <Text style={s.headerTitle}>Buddy</Text>
+            <Text style={s.headerSub}>Personal Chief of Staff</Text>
           </View>
 
-          {/* Right controls */}
+          {/* Right: Clear + Stop speaking + Mic — all vertically centred */}
           <View style={s.headerRight}>
             {isSpeaking && (
               <TouchableOpacity style={s.speakingBtn} onPress={stopSpeaking}>
                 <Text style={s.speakingBtnText}>⏸ Stop</Text>
               </TouchableOpacity>
             )}
+            <TouchableOpacity
+              onPress={() => {
+                setMessages([{
+                  id: '0', role: 'buddy',
+                  text: "Hey! I'm Buddy — your personal chief of staff. 👋\n\nYou have 2 urgent items today: your UAE visa expires in 8 days and your school fee of AED 14,000 is due today.\n\nTap 🎙️ to talk, or type below.",
+                  timestamp: new Date(),
+                }]);
+                setShowQuick(true);
+              }}
+            >
+              <Text style={s.clearBtnText}>Clear</Text>
+            </TouchableOpacity>
             <MicButton voiceState={voiceState} onPress={handleVoicePress} />
           </View>
         </View>
@@ -1283,8 +1347,7 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         </Modal>
       </KeyboardAvoidingView>
 
-      {/* ── Tab Bar ─────────────────────────────────────────────────────────── */}
-      <TabBar active="buddy" onTab={(sc) => nav.navigate(sc)} />
+      {/* Tab bar removed — back arrow in header handles navigation */}
     </View>
   );
 }
@@ -1299,23 +1362,31 @@ const s = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18, paddingTop: 6, paddingBottom: 8,
+    paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8,
+  },
+  backBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: '#1E1E1E',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  backIcon: { color: C.white, fontSize: 22, lineHeight: 26, fontWeight: '400', marginLeft: -1 },
+  headerCenter: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
   },
   headerLeft:  { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   buddyRing: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: `${C.verdigris}14`,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1.5, borderColor: `${C.verdigris}CC`,
-    shadowColor: C.verdigris, shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.35, shadowRadius: 8, elevation: 4,
   },
-  buddyRingIcon: { color: C.verdigris, fontSize: 18 },
-  headerTitle:   { color: C.white, fontSize: 17, fontWeight: '700', letterSpacing: 0.2 },
-  headerSub:     { color: C.textSec, fontSize: 10, letterSpacing: 0.4, marginTop: 1 },
+  buddyRingIcon: { color: C.verdigris, fontSize: 16 },
+  headerTitle:   { color: C.white, fontSize: 16, fontWeight: '700', letterSpacing: 0.3 },
+  headerSub:     { color: C.verdigris, fontSize: 10, letterSpacing: 0.5, marginTop: 1 },
+  clearBtnText: { color: C.textSec, fontSize: 12, fontWeight: '500' },
   speakingBtn: {
-    paddingHorizontal: 11, paddingVertical: 5, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 7,
     backgroundColor: `${C.salmon}12`, borderWidth: 1, borderColor: `${C.salmon}28`,
   },
   speakingBtnText: { color: C.salmon, fontSize: 12, fontWeight: '600' },

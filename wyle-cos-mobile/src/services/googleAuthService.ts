@@ -68,6 +68,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',   // store docs in user's Drive
 ];
 
+// Legacy single-account keys — kept for backward compatibility / migration only
 const SECURE_KEYS = {
   ACCESS_TOKEN:  'google_access_token',
   REFRESH_TOKEN: 'google_refresh_token',
@@ -75,12 +76,16 @@ const SECURE_KEYS = {
   USER_EMAIL:    'google_user_email',
 };
 
+// Key for the JSON array of connected email addresses
+const ACCOUNTS_LIST_KEY = 'wyle_google_accounts';
+
 // Temp keys stored in localStorage between the redirect away and back
 const WEB_PKCE_KEYS = {
   VERIFIER:     'wyle_oauth_verifier',
   STATE:        'wyle_oauth_state',
   REDIRECT_URI: 'wyle_oauth_redirect_uri',
   CLIENT_ID:    'wyle_oauth_client_id',
+  MODE:         'wyle_oauth_mode',  // 'sign_in' | 'add_account'
 };
 
 // ── Storage abstraction ────────────────────────────────────────────────────────
@@ -97,10 +102,36 @@ async function deleteItem(key: string): Promise<void> {
   await SecureStore.deleteItemAsync(key).catch(() => {});
 }
 
+// ── Per-account key helpers ────────────────────────────────────────────────────
+async function getAccountsList(): Promise<string[]> {
+  const raw = await getItem(ACCOUNTS_LIST_KEY);
+  if (!raw) return [];
+  try { return JSON.parse(raw); } catch { return []; }
+}
+
+async function saveAccountsList(emails: string[]): Promise<void> {
+  const unique = [...new Set(emails)];
+  await storeItem(ACCOUNTS_LIST_KEY, JSON.stringify(unique));
+}
+
+function accountKeys(email: string) {
+  const safe = email.replace(/[^a-zA-Z0-9]/g, '_');
+  return {
+    ACCESS_TOKEN:  `gat_${safe}`,
+    REFRESH_TOKEN: `grt_${safe}`,
+    TOKEN_EXPIRY:  `gte_${safe}`,
+  };
+}
+
 export type GoogleAuthResult =
   | { success: true;  accessToken: string; email: string }
   | { success: false; error: string }
   | { success: 'redirect' };          // web only — page is navigating away
+
+export interface GoogleAccount {
+  email: string;
+  isPrimary: boolean;
+}
 
 // ── OAuth discovery ────────────────────────────────────────────────────────────
 const discovery = {
@@ -135,7 +166,7 @@ function randomState(): string {
 //
 // Step 1: Call this to start sign-in. It saves PKCE state and redirects the page.
 //         The calling component will never get a response — the page navigates away.
-async function startWebRedirect(): Promise<void> {
+async function startWebRedirect(mode: 'sign_in' | 'add_account' = 'sign_in'): Promise<void> {
   const clientId   = getClientId();
   const redirectUri = getOAuthRedirectUri();
 
@@ -150,6 +181,11 @@ async function startWebRedirect(): Promise<void> {
   localStorage.setItem(WEB_PKCE_KEYS.STATE,        state);
   localStorage.setItem(WEB_PKCE_KEYS.REDIRECT_URI, redirectUri);
   localStorage.setItem(WEB_PKCE_KEYS.CLIENT_ID,    clientId);
+  localStorage.setItem(WEB_PKCE_KEYS.MODE,         mode);
+  // Mark as Google flow so Microsoft callback handler skips it
+  localStorage.setItem('wyle_oauth_provider', 'google');
+
+  const prompt = mode === 'add_account' ? 'select_account' : 'consent';
 
   const params = new URLSearchParams({
     client_id:             clientId,
@@ -160,7 +196,7 @@ async function startWebRedirect(): Promise<void> {
     code_challenge:        challenge,
     code_challenge_method: 'S256',
     access_type:           'offline',
-    prompt:                'consent',
+    prompt,
   });
 
   // Full-page redirect — no popup, no COOP issues
@@ -172,6 +208,10 @@ async function startWebRedirect(): Promise<void> {
 //         If not a callback, returns null (no-op).
 export async function handleGoogleOAuthCallback(): Promise<GoogleAuthResult | null> {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+
+  // If a Microsoft OAuth flow is in progress, skip this handler
+  const oauthProvider = localStorage.getItem('wyle_oauth_provider');
+  if (oauthProvider === 'microsoft') return null;
 
   const urlParams = new URLSearchParams(window.location.search);
   const code  = urlParams.get('code');
@@ -191,6 +231,7 @@ export async function handleGoogleOAuthCallback(): Promise<GoogleAuthResult | nu
   const codeVerifier   = localStorage.getItem(WEB_PKCE_KEYS.VERIFIER);
   const redirectUri    = localStorage.getItem(WEB_PKCE_KEYS.REDIRECT_URI);
   const storedClientId = localStorage.getItem(WEB_PKCE_KEYS.CLIENT_ID);
+  const mode           = localStorage.getItem(WEB_PKCE_KEYS.MODE) ?? 'sign_in';
 
   // Clean up PKCE keys
   Object.values(WEB_PKCE_KEYS).forEach(k => localStorage.removeItem(k));
@@ -227,18 +268,35 @@ export async function handleGoogleOAuthCallback(): Promise<GoogleAuthResult | nu
     }
 
     const { access_token, refresh_token, expires_in } = data;
-
-    await storeItem(SECURE_KEYS.ACCESS_TOKEN, access_token);
-    if (refresh_token) await storeItem(SECURE_KEYS.REFRESH_TOKEN, refresh_token);
     const expiry = Date.now() + (expires_in ?? 3600) * 1000;
-    await storeItem(SECURE_KEYS.TOKEN_EXPIRY, expiry.toString());
 
     // Fetch user email
     const userInfo = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${access_token}` },
     }).then(r => r.json());
     const email = userInfo.email ?? '';
-    await storeItem(SECURE_KEYS.USER_EMAIL, email);
+
+    // Add email to accounts list
+    const accounts = await getAccountsList();
+    if (!accounts.includes(email)) {
+      await saveAccountsList([...accounts, email]);
+    } else {
+      await saveAccountsList(accounts); // ensure it's saved
+    }
+
+    // Store tokens under email-specific keys
+    const keys = accountKeys(email);
+    await storeItem(keys.ACCESS_TOKEN, access_token);
+    if (refresh_token) await storeItem(keys.REFRESH_TOKEN, refresh_token);
+    await storeItem(keys.TOKEN_EXPIRY, expiry.toString());
+
+    // Also store in legacy keys if this is the primary (first) account
+    if (mode === 'sign_in' || accounts.length === 0) {
+      await storeItem(SECURE_KEYS.ACCESS_TOKEN, access_token);
+      await storeItem(SECURE_KEYS.USER_EMAIL, email);
+      if (refresh_token) await storeItem(SECURE_KEYS.REFRESH_TOKEN, refresh_token);
+      await storeItem(SECURE_KEYS.TOKEN_EXPIRY, expiry.toString());
+    }
 
     return { success: true, accessToken: access_token, email };
   } catch (err: any) {
@@ -255,7 +313,7 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
 
   // ── Web: use full-page redirect to avoid COOP popup issue ─────────────────
   if (Platform.OS === 'web') {
-    await startWebRedirect(); // triggers window.location.href redirect → never returns normally
+    await startWebRedirect('sign_in'); // triggers window.location.href redirect → never returns normally
     return { success: 'redirect' }; // page is navigating; caller should not act on this
   }
 
@@ -292,15 +350,31 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
     const { accessToken, refreshToken, expiresIn } = tokenRes;
     if (!accessToken) return { success: false, error: 'No access token returned' };
 
-    await storeItem(SECURE_KEYS.ACCESS_TOKEN, accessToken);
-    if (refreshToken) await storeItem(SECURE_KEYS.REFRESH_TOKEN, refreshToken);
     const expiry = Date.now() + (expiresIn ?? 3600) * 1000;
-    await storeItem(SECURE_KEYS.TOKEN_EXPIRY, expiry.toString());
 
     const userInfo = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { Authorization: `Bearer ${accessToken}` },
     }).then(r => r.json());
     const email = userInfo.email ?? '';
+
+    // Add email to accounts list
+    const accounts = await getAccountsList();
+    if (!accounts.includes(email)) {
+      await saveAccountsList([...accounts, email]);
+    } else {
+      await saveAccountsList(accounts);
+    }
+
+    // Store tokens under email-specific keys
+    const keys = accountKeys(email);
+    await storeItem(keys.ACCESS_TOKEN, accessToken);
+    if (refreshToken) await storeItem(keys.REFRESH_TOKEN, refreshToken);
+    await storeItem(keys.TOKEN_EXPIRY, expiry.toString());
+
+    // Also store in legacy keys (sign_in = primary account)
+    await storeItem(SECURE_KEYS.ACCESS_TOKEN, accessToken);
+    if (refreshToken) await storeItem(SECURE_KEYS.REFRESH_TOKEN, refreshToken);
+    await storeItem(SECURE_KEYS.TOKEN_EXPIRY, expiry.toString());
     await storeItem(SECURE_KEYS.USER_EMAIL, email);
 
     return { success: true, accessToken, email };
@@ -309,9 +383,151 @@ export async function signInWithGoogle(): Promise<GoogleAuthResult> {
   }
 }
 
-// ── Get stored access token (refreshes if expired) ────────────────────────────
+// ── Add additional Google account ─────────────────────────────────────────────
+export async function addGoogleAccount(): Promise<GoogleAuthResult> {
+  const clientId = getClientId();
+  if (!clientId) {
+    return { success: false, error: 'Google Client ID not set in .env' };
+  }
+
+  // ── Web: redirect with select_account prompt ───────────────────────────────
+  if (Platform.OS === 'web') {
+    await startWebRedirect('add_account');
+    return { success: 'redirect' };
+  }
+
+  // ── Native: expo-auth-session with select_account prompt ──────────────────
+  try {
+    const redirectUri = getOAuthRedirectUri();
+
+    const request = new AuthSession.AuthRequest({
+      clientId,
+      scopes:       SCOPES,
+      redirectUri,
+      responseType: AuthSession.ResponseType.Code,
+      usePKCE:      true,
+      extraParams:  { access_type: 'offline', prompt: 'select_account' },
+    });
+
+    const result = await request.promptAsync(discovery);
+
+    if (result.type !== 'success') {
+      return { success: false, error: result.type === 'cancel' ? 'Cancelled' : 'Auth failed' };
+    }
+
+    const tokenRes = await AuthSession.exchangeCodeAsync(
+      {
+        clientId,
+        code:        result.params.code,
+        redirectUri,
+        extraParams: { code_verifier: request.codeVerifier ?? '' },
+      },
+      discovery,
+    );
+
+    const { accessToken, refreshToken, expiresIn } = tokenRes;
+    if (!accessToken) return { success: false, error: 'No access token returned' };
+
+    const expiry = Date.now() + (expiresIn ?? 3600) * 1000;
+
+    const userInfo = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }).then(r => r.json());
+    const email = userInfo.email ?? '';
+
+    // Add email to accounts list (additive, not replace)
+    const accounts = await getAccountsList();
+    if (!accounts.includes(email)) {
+      await saveAccountsList([...accounts, email]);
+    } else {
+      await saveAccountsList(accounts);
+    }
+
+    // Store tokens under email-specific keys
+    const keys = accountKeys(email);
+    await storeItem(keys.ACCESS_TOKEN, accessToken);
+    if (refreshToken) await storeItem(keys.REFRESH_TOKEN, refreshToken);
+    await storeItem(keys.TOKEN_EXPIRY, expiry.toString());
+
+    return { success: true, accessToken, email };
+  } catch (err: any) {
+    return { success: false, error: err?.message ?? 'Unknown error' };
+  }
+}
+
+// ── Get access token for a specific email (with auto-refresh) ─────────────────
+export async function getAccessTokenForEmail(email: string): Promise<string | null> {
+  const keys = accountKeys(email);
+  const token  = await getItem(keys.ACCESS_TOKEN);
+  const expiry = await getItem(keys.TOKEN_EXPIRY);
+  if (!token) return null;
+  if (expiry && Date.now() < parseInt(expiry) - 60_000) return token;
+  // refresh
+  const refresh = await getItem(keys.REFRESH_TOKEN);
+  const clientId = getClientId();
+  if (!refresh || !clientId) return null;
+  try {
+    const refreshBody: Record<string, string> = { client_id: clientId, refresh_token: refresh, grant_type: 'refresh_token' };
+    const clientSecret = getClientSecret();
+    if (clientSecret) refreshBody.client_secret = clientSecret;
+    const res = await fetch(discovery.tokenEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(refreshBody).toString() });
+    const data = await res.json();
+    if (!data.access_token) return null;
+    await storeItem(keys.ACCESS_TOKEN, data.access_token);
+    const newExpiry = Date.now() + (data.expires_in ?? 3600) * 1000;
+    await storeItem(keys.TOKEN_EXPIRY, newExpiry.toString());
+    return data.access_token;
+  } catch { return null; }
+}
+
+// ── Get all connected Google accounts ─────────────────────────────────────────
+export async function getAllGoogleAccounts(): Promise<string[]> {
+  const list = await getAccountsList();
+  if (list.length > 0) return list;
+  // migration: check legacy single-account
+  const legacyEmail = await getItem(SECURE_KEYS.USER_EMAIL);
+  const legacyToken = await getItem(SECURE_KEYS.ACCESS_TOKEN);
+  if (legacyEmail && legacyToken) {
+    await saveAccountsList([legacyEmail]);
+    return [legacyEmail];
+  }
+  return [];
+}
+
+// ── Disconnect a specific Google account ──────────────────────────────────────
+export async function disconnectGoogleAccount(email: string): Promise<void> {
+  const keys = accountKeys(email);
+  const token = await getItem(keys.ACCESS_TOKEN);
+  if (token) fetch(`${discovery.revocationEndpoint}?token=${token}`, { method: 'POST' }).catch(() => {});
+  await Promise.all([deleteItem(keys.ACCESS_TOKEN), deleteItem(keys.REFRESH_TOKEN), deleteItem(keys.TOKEN_EXPIRY)]);
+  const accounts = await getAccountsList();
+  await saveAccountsList(accounts.filter(e => e !== email));
+  // if removing primary, also clean legacy keys
+  const legacy = await getItem(SECURE_KEYS.USER_EMAIL);
+  if (legacy === email) {
+    await Promise.all(Object.values(SECURE_KEYS).map(k => deleteItem(k)));
+  }
+}
+
+// ── Disconnect all Google accounts ────────────────────────────────────────────
+export async function disconnectAllGoogleAccounts(): Promise<void> {
+  const accounts = await getAllGoogleAccounts();
+  await Promise.all(accounts.map(e => disconnectGoogleAccount(e)));
+  await deleteItem(ACCOUNTS_LIST_KEY);
+}
+
+// ── Get stored access token (primary account, with auto-refresh) ──────────────
+// Tries per-account storage first (first in list), falls back to legacy keys.
 export async function getAccessToken(): Promise<string | null> {
   try {
+    // Try first account in list
+    const accounts = await getAllGoogleAccounts();
+    if (accounts.length > 0) {
+      const token = await getAccessTokenForEmail(accounts[0]);
+      if (token) return token;
+    }
+
+    // Fallback: legacy keys (migration path)
     const token  = await getItem(SECURE_KEYS.ACCESS_TOKEN);
     const expiry = await getItem(SECURE_KEYS.TOKEN_EXPIRY);
 
@@ -349,16 +565,17 @@ export async function getAccessToken(): Promise<string | null> {
 
 // ── Check if connected ─────────────────────────────────────────────────────────
 export async function isGoogleConnected(): Promise<{ connected: boolean; email: string }> {
-  const token = await getAccessToken();
+  const accounts = await getAllGoogleAccounts();
+  if (accounts.length > 0) {
+    return { connected: true, email: accounts[0] };
+  }
+  // fallback to legacy check
+  const token = await getItem(SECURE_KEYS.ACCESS_TOKEN);
   const email = (await getItem(SECURE_KEYS.USER_EMAIL)) ?? '';
   return { connected: !!token, email };
 }
 
-// ── Disconnect ─────────────────────────────────────────────────────────────────
+// ── Disconnect (legacy single-account — disconnects all) ──────────────────────
 export async function disconnectGoogle(): Promise<void> {
-  const token = await getItem(SECURE_KEYS.ACCESS_TOKEN);
-  if (token) {
-    fetch(`${discovery.revocationEndpoint}?token=${token}`, { method: 'POST' }).catch(() => {});
-  }
-  await Promise.all(Object.values(SECURE_KEYS).map(k => deleteItem(k)));
+  await disconnectAllGoogleAccounts();
 }

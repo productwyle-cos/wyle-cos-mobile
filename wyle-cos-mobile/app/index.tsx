@@ -2,7 +2,7 @@
 // Single entry point — controls every screen transition.
 
 import React, { useEffect, useState } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import SplashScreen        from '../src/screens/Onboarding/SplashScreen';
@@ -40,13 +40,98 @@ export default function AppEntry() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    AsyncStorage.getItem('wyle_token').then(token => {
-      setScreen(token ? 'home' : 'splash');
-      setLoading(false);
-    }).catch(() => {
-      setScreen('splash');
-      setLoading(false);
-    });
+    const init = async () => {
+      // ── On web: handle Google OAuth full-page redirect callback FIRST ──────
+      // When the user taps "Sign in with Google", the whole page redirects to
+      // Google. When Google sends them back (with ?code=... in the URL),
+      // we must exchange that code for tokens before deciding which screen
+      // to show. If we skip this step the user ends up back at the splash
+      // screen with nothing saved.
+      if (Platform.OS === 'web') {
+        // ── Handle Microsoft OAuth callback ─────────────────────────────────
+        try {
+          const { handleOutlookOAuthCallback } =
+            await import('../src/services/outlookAuthService');
+          const msCb = await handleOutlookOAuthCallback();
+          if (msCb !== null) {
+            // This page load is a Microsoft OAuth callback
+            if (msCb.success === true) {
+              console.log('[App] Microsoft OAuth success for:', msCb.email);
+              const existingToken = await AsyncStorage.getItem('wyle_token');
+              if (!existingToken) {
+                await AsyncStorage.setItem('wyle_token', 'microsoft_auth_token');
+                await AsyncStorage.setItem('wyle_user', JSON.stringify({
+                  _id:                'ms_' + msCb.email.replace(/[^a-z0-9]/gi, ''),
+                  name:               msCb.email.split('@')[0] || 'Wyle User',
+                  email:              msCb.email,
+                  onboardingComplete: true,
+                }));
+                setScreen('preparation');
+              } else {
+                setScreen('home');
+              }
+            } else if (msCb.success === false) {
+              console.error('[App] Microsoft OAuth failed:', msCb.error);
+              // Show error to user so they know connection failed
+              alert(`Microsoft connection failed:\n\n${msCb.error}\n\nCommon fix: Add your Codespace URL to Azure Portal → App Registration → Authentication → Redirect URIs`);
+              setScreen(await AsyncStorage.getItem('wyle_token') ? 'home' : 'login');
+            }
+            setLoading(false);
+            return;
+          }
+        } catch (e) {
+          console.warn('[App] Microsoft OAuth callback error:', e);
+        }
+
+        // ── Handle Google OAuth callback ─────────────────────────────────────
+        try {
+          const { handleGoogleOAuthCallback } =
+            await import('../src/services/googleAuthService');
+          const cb = await handleGoogleOAuthCallback();
+
+          if (cb !== null) {
+            // This page load IS a Google OAuth callback
+            if (cb.success === true) {
+              const existingToken = await AsyncStorage.getItem('wyle_token');
+              if (!existingToken) {
+                // First-time Google sign-in — create the app session
+                await AsyncStorage.setItem('wyle_token', 'google_auth_token');
+                await AsyncStorage.setItem('wyle_user', JSON.stringify({
+                  _id:                'g_' + cb.email.replace(/[^a-z0-9]/gi, ''),
+                  name:               cb.email.split('@')[0] || 'Wyle User',
+                  email:              cb.email,
+                  onboardingComplete: true,
+                }));
+                setScreen('preparation');
+              } else {
+                // Already logged in — user was connecting Google from Profile
+                setScreen('home');
+              }
+            } else {
+              // OAuth failed or was cancelled — drop back to login
+              setScreen('login');
+            }
+            setLoading(false);
+            return;   // ← skip the normal token check below
+          }
+        } catch (e) {
+          console.warn('[App] Google OAuth callback error:', e);
+        }
+      }
+
+      // ── Normal startup — check for an existing session ────────────────────
+      AsyncStorage.getItem('wyle_token')
+        .then(token => {
+          setScreen(token ? 'home' : 'splash');
+          setLoading(false);
+        })
+        .catch(() => {
+          setScreen('splash');
+          setLoading(false);
+        });
+    };
+
+    init();
   }, []);
 
   const navigation: NavProp = {

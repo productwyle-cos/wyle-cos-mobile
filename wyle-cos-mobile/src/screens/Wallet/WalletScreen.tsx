@@ -222,76 +222,83 @@ function DocCard({
   };
 
   return (
-    <TouchableOpacity style={card.wrap} activeOpacity={0.82} onPress={handleOpen}>
-      {/* Left colour accent bar */}
-      <View style={[card.accent, { backgroundColor: cfg.color }]} />
+    <TouchableOpacity style={card.wrap} activeOpacity={0.80} onPress={handleOpen}>
+      {/* Left colour strip */}
+      <View style={[card.strip, { backgroundColor: cfg.color }]} />
 
       {/* Abbreviation badge */}
-      <View style={[card.abbrWrap, { backgroundColor: `${cfg.color}16` }]}>
-        <Text style={[card.abbrText, { color: cfg.color }]}>{cfg.abbr}</Text>
+      <View style={[card.badgeWrap, { backgroundColor: `${cfg.color}14` }]}>
+        <Text style={[card.badgeText, { color: cfg.color }]}>{cfg.abbr}</Text>
       </View>
 
       {/* Content */}
       <View style={card.content}>
-        {/* Title row */}
+
+        {/* Title + delete */}
         <View style={card.titleRow}>
           <Text style={card.title} numberOfLines={2}>{doc.title}</Text>
           <TouchableOpacity
             onPress={() => onDelete(doc)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             style={card.deleteBtn}
           >
-            <Text style={card.deleteBtnText}>✕</Text>
+            <View style={card.deleteBtnCircle}>
+              <Text style={card.deleteBtnText}>✕</Text>
+            </View>
           </TouchableOpacity>
         </View>
 
-        {/* Type badge */}
-        <View style={[card.typeBadge, { borderColor: `${cfg.color}40` }]}>
-          <Text style={[card.typeText, { color: cfg.color }]}>{cfg.label.toUpperCase()}</Text>
-        </View>
+        {/* Type · Vendor in one line */}
+        <Text style={[card.typeVendorLine, { color: cfg.color }]} numberOfLines={1}>
+          {cfg.label.toUpperCase()}
+          {doc.vendor ? `  ·  ${doc.vendor}` : ''}
+        </Text>
 
-        {/* Meta rows */}
-        <View style={card.metaBlock}>
-          {doc.vendor ? (
-            <View style={card.metaRow}>
-              <Text style={card.metaKey}>Issuer</Text>
-              <Text style={card.metaVal} numberOfLines={1}>{doc.vendor}</Text>
-            </View>
-          ) : null}
-          {doc.personName ? (
-            <View style={card.metaRow}>
-              <Text style={card.metaKey}>Name</Text>
-              <Text style={card.metaVal} numberOfLines={1}>{doc.personName}</Text>
-            </View>
-          ) : null}
-          {doc.reference ? (
-            <View style={card.metaRow}>
-              <Text style={card.metaKey}>Ref</Text>
-              <Text style={card.metaVal} numberOfLines={1}>{doc.reference}</Text>
-            </View>
-          ) : null}
-        </View>
+        {/* Person + Ref as subtle sub-line */}
+        {(doc.personName || doc.reference) ? (
+          <View style={card.subLine}>
+            {doc.personName ? (
+              <Text style={card.subItem} numberOfLines={1}>{doc.personName}</Text>
+            ) : null}
+            {doc.personName && doc.reference ? (
+              <Text style={card.subDot}> · </Text>
+            ) : null}
+            {doc.reference ? (
+              <Text style={card.subItem} numberOfLines={1}>{doc.reference}</Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* Divider */}
+        {(doc.amounts?.length > 0 || expiry.label) ? (
+          <View style={card.divider} />
+        ) : null}
 
         {/* Amount pills */}
         {doc.amounts?.length > 0 && (
           <View style={card.amountRow}>
             {doc.amounts.slice(0, 3).map((a, i) => (
-              <View key={i} style={card.amountBadge}>
+              <View key={i} style={card.amountPill}>
                 <Text style={card.amountText}>{a.currency} {a.value}</Text>
               </View>
             ))}
           </View>
         )}
 
-        {/* Footer: expiry + scanned date */}
+        {/* Footer: expiry badge + scanned date */}
         <View style={card.footer}>
           {expiry.label ? (
-            <View style={[card.expiryBadge, { backgroundColor: `${expiry.color}14`, borderColor: `${expiry.color}35` }]}>
+            <View style={[card.expiryBadge, {
+              backgroundColor: `${expiry.color}12`,
+              borderColor: `${expiry.color}30`,
+            }]}>
+              <View style={[card.expiryDot, { backgroundColor: expiry.color }]} />
               <Text style={[card.expiryText, { color: expiry.color }]}>{expiry.label}</Text>
             </View>
           ) : <View />}
-          <Text style={card.uploadedAt}>Scanned {uploadedDate}</Text>
+          <Text style={card.scannedAt}>Scanned {uploadedDate}</Text>
         </View>
+
       </View>
     </TouchableOpacity>
   );
@@ -301,43 +308,102 @@ const card = StyleSheet.create({
   wrap: {
     flexDirection: 'row',
     backgroundColor: C.surface,
-    borderRadius: 14,
-    marginBottom: 10,
-    borderWidth: 1, borderColor: C.border,
+    borderRadius: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: C.border,
     overflow: 'hidden',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
   },
-  accent: { width: 4 },
-  abbrWrap: {
-    width: 56, alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 16,
+  strip: { width: 4 },
+  badgeWrap: {
+    width: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
   },
-  abbrText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
-  content:  { flex: 1, paddingVertical: 12, paddingRight: 12, paddingLeft: 4, gap: 6 },
-  titleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
-  title:    { color: C.white, fontSize: 14, fontWeight: '700', flex: 1, lineHeight: 20 },
-  deleteBtn:     { paddingLeft: 8, paddingTop: 2 },
-  deleteBtnText: { color: C.textTer, fontSize: 13 },
-  typeBadge: {
-    alignSelf: 'flex-start',
-    borderWidth: 1, borderRadius: 4,
-    paddingHorizontal: 6, paddingVertical: 2,
+  badgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.8, textAlign: 'center' },
+  content: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingRight: 14,
+    paddingLeft: 6,
+    gap: 5,
   },
-  typeText: { fontSize: 9, fontWeight: '800', letterSpacing: 1 },
-  metaBlock: { gap: 2, marginTop: 2 },
-  metaRow:   { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  metaKey:   { color: C.textTer, fontSize: 10, fontWeight: '600', width: 36, letterSpacing: 0.3 },
-  metaVal:   { color: C.textSec, fontSize: 12, flex: 1 },
-  amountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
-  amountBadge: {
-    backgroundColor: `${C.verdigris}12`,
-    borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
-    borderWidth: 1, borderColor: `${C.verdigris}25`,
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  title: {
+    color: C.white,
+    fontSize: 14,
+    fontWeight: '700',
+    flex: 1,
+    lineHeight: 21,
+    paddingRight: 6,
+  },
+  deleteBtn: { paddingTop: 1 },
+  deleteBtnCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: C.surfaceHi,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  deleteBtnText: { color: C.textTer, fontSize: 9, lineHeight: 14 },
+  typeVendorLine: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+  subLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  subItem: { color: C.textSec, fontSize: 11 },
+  subDot:  { color: C.textTer, fontSize: 11 },
+  divider: {
+    height: 1,
+    backgroundColor: C.border,
+    marginVertical: 4,
+  },
+  amountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  amountPill: {
+    backgroundColor: `${C.verdigris}10`,
+    borderRadius: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: `${C.verdigris}22`,
   },
   amountText: { color: C.verdigris, fontSize: 11, fontWeight: '700' },
-  footer:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
-  expiryBadge: { borderRadius: 5, paddingHorizontal: 7, paddingVertical: 2, borderWidth: 1 },
-  expiryText:  { fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
-  uploadedAt:  { color: C.textTer, fontSize: 10 },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  expiryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+  },
+  expiryDot: { width: 5, height: 5, borderRadius: 3 },
+  expiryText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.2 },
+  scannedAt: { color: C.textTer, fontSize: 10 },
 });
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
@@ -542,15 +608,18 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
 
         {/* Header */}
         <View style={s.header}>
-          <View>
+          <View style={s.headerLeft}>
             <Text style={s.headerTitle}>Document Wallet</Text>
-            <Text style={s.headerSub}>
-              {docs.length > 0
-                ? `${docs.length} document${docs.length === 1 ? '' : 's'} · stored in your Google Drive`
-                : 'Your scanned documents live here'}
-            </Text>
+            <View style={s.headerSubRow}>
+              <Text style={s.headerSub}>Stored in Google Drive</Text>
+              {docs.length > 0 && (
+                <View style={s.headerCountBadge}>
+                  <Text style={s.headerCountText}>{docs.length}</Text>
+                </View>
+              )}
+            </View>
           </View>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
+          <View style={s.headerActions}>
             <TouchableOpacity
               style={s.uploadBtn}
               onPress={() => setUploadMenuVisible(true)}
@@ -558,9 +627,10 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
             >
               <Text style={s.uploadBtnText}>+ Upload</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={s.driveBtn} onPress={() =>
-              Linking.openURL('https://drive.google.com').catch(() => {})
-            }>
+            <TouchableOpacity
+              style={s.driveBtn}
+              onPress={() => Linking.openURL('https://drive.google.com').catch(() => {})}
+            >
               <Text style={s.driveBtnText}>Drive</Text>
             </TouchableOpacity>
           </View>
@@ -578,6 +648,7 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          style={s.filterScroll}
           contentContainerStyle={s.filterRow}
         >
           {FILTERS.map(f => (
@@ -648,29 +719,39 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
           <View style={upMenu.sheet}>
             <View style={upMenu.handle} />
             <Text style={upMenu.title}>Add Document</Text>
+            <Text style={upMenu.subtitle}>Choose how to import your document</Text>
 
             <TouchableOpacity style={upMenu.row} onPress={handlePickCamera}>
-              <View style={upMenu.iconWrap}><Text style={upMenu.icon}>📷</Text></View>
+              <View style={[upMenu.iconWrap, { backgroundColor: '#1B998B18', borderColor: '#1B998B30' }]}>
+                <Text style={[upMenu.iconLabel, { color: '#1B998B' }]}>CAM</Text>
+              </View>
               <View style={upMenu.rowText}>
                 <Text style={upMenu.rowLabel}>Camera</Text>
                 <Text style={upMenu.rowSub}>Take a photo of a document</Text>
               </View>
+              <Text style={upMenu.rowChevron}>›</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={upMenu.row} onPress={handlePickPhotos}>
-              <View style={upMenu.iconWrap}><Text style={upMenu.icon}>🖼️</Text></View>
+              <View style={[upMenu.iconWrap, { backgroundColor: '#4A90D918', borderColor: '#4A90D930' }]}>
+                <Text style={[upMenu.iconLabel, { color: '#4A90D9' }]}>IMG</Text>
+              </View>
               <View style={upMenu.rowText}>
                 <Text style={upMenu.rowLabel}>Photo Library</Text>
-                <Text style={upMenu.rowSub}>Choose an existing photo</Text>
+                <Text style={upMenu.rowSub}>Choose an existing image</Text>
               </View>
+              <Text style={upMenu.rowChevron}>›</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={upMenu.row} onPress={handlePickFiles}>
-              <View style={upMenu.iconWrap}><Text style={upMenu.icon}>📄</Text></View>
+            <TouchableOpacity style={[upMenu.row, { borderBottomWidth: 0 }]} onPress={handlePickFiles}>
+              <View style={[upMenu.iconWrap, { backgroundColor: '#7B61FF18', borderColor: '#7B61FF30' }]}>
+                <Text style={[upMenu.iconLabel, { color: '#7B61FF' }]}>PDF</Text>
+              </View>
               <View style={upMenu.rowText}>
                 <Text style={upMenu.rowLabel}>Files</Text>
-                <Text style={upMenu.rowSub}>Pick a PDF or image file</Text>
+                <Text style={upMenu.rowSub}>Pick a PDF or document file</Text>
               </View>
+              <Text style={upMenu.rowChevron}>›</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={upMenu.cancelBtn} onPress={() => setUploadMenuVisible(false)}>
@@ -734,151 +815,262 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
+
   header: {
-    flexDirection: 'row', alignItems: 'center',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingTop: 12, paddingBottom: 16,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
   },
-  headerTitle: { color: C.white, fontSize: 24, fontWeight: '800' },
-  headerSub:   { color: C.textSec, fontSize: 12, marginTop: 2 },
+  headerLeft:  { flex: 1, marginRight: 12 },
+  headerTitle: { color: C.white, fontSize: 22, fontWeight: '800', letterSpacing: -0.3 },
+  headerSubRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  headerSub:    { color: C.textSec, fontSize: 12 },
+  headerCountBadge: {
+    backgroundColor: C.surfaceEl,
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  headerCountText: { color: C.textSec, fontSize: 11, fontWeight: '700' },
+
+  headerActions: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+
+  uploadBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: C.verdigris,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  uploadBtnText: { color: C.white, fontSize: 13, fontWeight: '700' },
+
   driveBtn: {
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: 12, backgroundColor: C.surfaceEl,
-    borderWidth: 1, borderColor: C.border,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: C.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   driveBtnText: { color: C.textSec, fontSize: 13, fontWeight: '600' },
 
+  filterScroll: {
+    flexGrow: 0,          // ← prevents vertical stretch
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+  },
   filterRow: {
-    flexDirection: 'row', gap: 8,
-    paddingHorizontal: 20, paddingBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center', // ← keeps pills vertically centred
+    gap: 6,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 10,
   },
   filterTab: {
-    paddingHorizontal: 14, paddingVertical: 7,
-    borderRadius: 999, backgroundColor: C.surfaceEl,
-    borderWidth: 1, borderColor: C.border,
+    paddingHorizontal: 13,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: C.surfaceEl,
+    borderWidth: 1,
+    borderColor: C.border,
   },
   filterTabActive: {
-    backgroundColor: C.verdigris, borderColor: C.verdigris,
+    backgroundColor: C.verdigris,
+    borderColor: C.verdigris,
   },
-  filterTabText:       { color: C.textSec, fontSize: 13, fontWeight: '600' },
-  filterTabTextActive: { color: C.white },
+  filterTabText:       { color: C.textSec, fontSize: 12, fontWeight: '600' },
+  filterTabTextActive: { color: C.white, fontWeight: '700' },
 
-  list:   { paddingHorizontal: 20, paddingBottom: 24 },
+  list:   { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 32 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
 
   emptyTitle: {
-    color: C.white, fontSize: 18, fontWeight: '700',
-    textAlign: 'center', marginBottom: 10,
+    color: C.white,
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: 10,
+    marginTop: 4,
   },
   emptySub: {
-    color: C.textSec, fontSize: 14, textAlign: 'center', lineHeight: 21,
+    color: C.textSec,
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 22,
   },
 
   connectBtn: {
-    marginTop: 24, backgroundColor: C.verdigris,
-    borderRadius: 14, paddingHorizontal: 24, paddingVertical: 14,
+    marginTop: 24,
+    backgroundColor: C.verdigris,
+    borderRadius: 14,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
   },
   connectBtnText: { color: C.white, fontSize: 15, fontWeight: '700' },
 
   loadingText: { color: C.textSec, fontSize: 14, marginTop: 12 },
 
   emptyIcon: {
-    width: 64, height: 64, borderRadius: 18,
+    width: 60,
+    height: 60,
+    borderRadius: 18,
     backgroundColor: C.surfaceEl,
-    borderWidth: 1, borderColor: C.border,
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
   },
-  emptyIconText: { color: C.textTer, fontSize: 22, fontWeight: '800' },
-
-  uploadBtn: {
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: 12, backgroundColor: C.verdigris,
-  },
-  uploadBtnText: { color: C.white, fontSize: 13, fontWeight: '700' },
+  emptyIconText: { color: C.textTer, fontSize: 20, fontWeight: '800' },
 
   uploadBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    marginHorizontal: 20, marginBottom: 10,
-    backgroundColor: `${C.verdigris}18`,
-    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
-    borderWidth: 1, borderColor: `${C.verdigris}30`,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    backgroundColor: `${C.verdigris}15`,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: `${C.verdigris}28`,
   },
   uploadBannerText: { color: C.verdigris, fontSize: 13, fontWeight: '600' },
 });
 
 const upMenu = StyleSheet.create({
   overlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.60)',
     justifyContent: 'flex-end',
   },
   sheet: {
     backgroundColor: C.surface,
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: 20, paddingBottom: 36, paddingTop: 12,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderColor: C.border,
   },
   handle: {
-    width: 40, height: 4, borderRadius: 2,
-    backgroundColor: C.textTer, alignSelf: 'center', marginBottom: 18,
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: C.textTer,
+    alignSelf: 'center',
+    marginBottom: 20,
   },
   title: {
-    color: C.white, fontSize: 17, fontWeight: '800',
-    marginBottom: 16,
+    color: C.white,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  subtitle: {
+    color: C.textSec,
+    fontSize: 13,
+    marginTop: 4,
+    marginBottom: 20,
   },
   row: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
     paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: C.border,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
   },
   iconWrap: {
-    width: 48, height: 48, borderRadius: 14,
-    backgroundColor: C.surfaceEl,
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: C.border,
+    width: 46,
+    height: 46,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
   },
-  icon:     { fontSize: 22 },
-  rowText:  { flex: 1 },
-  rowLabel: { color: C.white, fontSize: 15, fontWeight: '700' },
-  rowSub:   { color: C.textSec, fontSize: 12, marginTop: 2 },
+  iconLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  rowText:   { flex: 1 },
+  rowLabel:  { color: C.white, fontSize: 15, fontWeight: '700' },
+  rowSub:    { color: C.textSec, fontSize: 12, marginTop: 2 },
+  rowChevron:{ color: C.textTer, fontSize: 20, fontWeight: '300' },
   cancelBtn: {
-    marginTop: 16, alignItems: 'center',
-    paddingVertical: 14, borderRadius: 14,
+    marginTop: 18,
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderRadius: 14,
     backgroundColor: C.surfaceEl,
-    borderWidth: 1, borderColor: C.border,
+    borderWidth: 1,
+    borderColor: C.border,
   },
   cancelText: { color: C.textSec, fontSize: 15, fontWeight: '700' },
 });
 
 const modal = StyleSheet.create({
   overlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
-    alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 32,
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
   },
   box: {
-    width: '100%', backgroundColor: C.surface,
-    borderRadius: 20, padding: 24,
-    borderWidth: 1, borderColor: C.border,
+    width: '100%',
+    backgroundColor: C.surface,
+    borderRadius: 22,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: C.border,
   },
   title: {
-    color: C.white, fontSize: 18, fontWeight: '800',
-    marginBottom: 10,
+    color: C.white,
+    fontSize: 17,
+    fontWeight: '800',
+    marginBottom: 8,
+    letterSpacing: -0.2,
   },
   message: {
-    color: C.textSec, fontSize: 14, lineHeight: 22,
+    color: C.textSec,
+    fontSize: 14,
+    lineHeight: 22,
     marginBottom: 24,
   },
   docName: { color: C.white, fontWeight: '700' },
-  btnRow: { flexDirection: 'row', gap: 12, justifyContent: 'flex-end' },
+  btnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'flex-end',
+  },
   cancelBtn: {
-    paddingHorizontal: 20, paddingVertical: 11,
-    borderRadius: 12, backgroundColor: C.surfaceEl,
-    borderWidth: 1, borderColor: C.border,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: C.surfaceEl,
+    borderWidth: 1,
+    borderColor: C.border,
   },
   cancelText: { color: C.textSec, fontSize: 14, fontWeight: '700' },
   removeBtn: {
-    paddingHorizontal: 20, paddingVertical: 11,
-    borderRadius: 12, backgroundColor: C.crimson,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: C.crimson,
   },
   removeText: { color: C.white, fontSize: 14, fontWeight: '700' },
 });

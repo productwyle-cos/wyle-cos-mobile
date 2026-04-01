@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Dimensions, Animated, StatusBar, ActivityIndicator, Platform,
+  Dimensions, Animated, StatusBar, ActivityIndicator, Platform, Alert, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -16,7 +16,12 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import {
   signInWithGoogle, isGoogleConnected, disconnectGoogle,
+  addGoogleAccount, disconnectGoogleAccount, getAllGoogleAccounts,
 } from '../../services/googleAuthService';
+import {
+  signInWithMicrosoft, addOutlookAccount as addMsAccount,
+  disconnectOutlookAccount, getAllOutlookAccounts,
+} from '../../services/outlookAuthService';
 import { runFullSignalScan } from '../../services/signalService';
 
 const { width } = Dimensions.get('window');
@@ -226,13 +231,25 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
   const googleEmail        = useAppStore(st => st.googleEmail);
   const setGoogleConnected = useAppStore(st => st.setGoogleConnected);
   const setGoogleEmail     = useAppStore(st => st.setGoogleEmail);
+  const googleAccounts     = useAppStore(s => s.googleAccounts);
+  const addGAcc            = useAppStore(s => s.addGoogleAccount);
+  const removeGAcc         = useAppStore(s => s.removeGoogleAccount);
+  const setGAccounts       = useAppStore(s => s.setGoogleAccounts);
+  const outlookAccounts    = useAppStore(s => s.outlookAccounts);
+  const addOAcc            = useAppStore(s => s.addOutlookAccount);
+  const removeOAcc         = useAppStore(s => s.removeOutlookAccount);
+  const setOAccounts       = useAppStore(s => s.setOutlookAccounts);
 
   // Local state
   const [userName,  setUserName]  = useState('Mohammed Al Rashid');
   const [userEmail, setUserEmail] = useState('mohammed@example.ae');
   const [userPhone, setUserPhone] = useState('+971 50 123 4567');
   const [location,  setLocation]  = useState('Dubai, UAE');
-  const [connecting, setConnecting] = useState(false);
+  const [connecting,           setConnecting]           = useState(false);
+  const [connectingOutlook,    setConnectingOutlook]    = useState(false);
+  const [confirmRemoveEmail,   setConfirmRemoveEmail]   = useState<string | null>(null);
+  const [confirmRemoveType,    setConfirmRemoveType]    = useState<'google' | 'outlook'>('google');
+  const [removing,             setRemoving]             = useState(false);
 
   const fadeIn  = useRef(new Animated.Value(0)).current;
   const slideUp = useRef(new Animated.Value(20)).current;
@@ -254,10 +271,18 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
       }
     });
 
-    // Check Google connection
-    isGoogleConnected().then(({ connected, email }) => {
-      if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
+    // Load all Google accounts (multi-account)
+    getAllGoogleAccounts().then(accounts => {
+      setGAccounts(accounts);
+      if (accounts.length > 0) {
+        setGoogleConnected(true);
+        setGoogleEmail(accounts[0]);
+      }
     });
+
+    // Load all Outlook / Microsoft accounts
+    const msAccounts = getAllOutlookAccounts();
+    if (msAccounts.length > 0) setOAccounts(msAccounts);
 
     // Entrance animation
     Animated.parallel([
@@ -270,11 +295,22 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
   const handleConnect = async () => {
     setConnecting(true);
     const result = await signInWithGoogle();
-    if (result.success) {
+
+    if (result.success === 'redirect') {
+      // Web: page is navigating to Google sign-in.
+      // Keep the spinner; app/index.tsx will handle the callback on return
+      // and isGoogleConnected() will reflect the new token when this screen remounts.
+      return; // do NOT call setConnecting(false) — page is redirecting away
+    }
+
+    if (result.success === true) {
       setGoogleConnected(true);
       setGoogleEmail(result.email);
       try {
-        const scan = await runFullSignalScan(result.accessToken, obligations.filter(o => o.status === 'active'));
+        const scan = await runFullSignalScan(
+          result.accessToken,
+          obligations.filter(o => o.status === 'active'),
+        );
         if (scan.obligations.length > 0) addObligations(scan.obligations);
       } catch {}
     }
@@ -285,6 +321,68 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
     await disconnectGoogle();
     setGoogleConnected(false);
     setGoogleEmail('');
+    setGAccounts([]);
+  };
+
+  // ── Add another Google account ──────────────────────────────────────────────
+  const handleAddAccount = async () => {
+    const result = await addGoogleAccount();
+    if (result.success === true) {
+      addGAcc(result.email);
+    } else if (result.success === 'redirect') {
+      // web: page is redirecting, nothing to do
+    } else {
+      Alert.alert('Error', result.error);
+    }
+  };
+
+  // ── Disconnect a specific Google account ────────────────────────────────────
+  const handleDisconnectAccount = (email: string, type: 'google' | 'outlook' = 'google') => {
+    setConfirmRemoveEmail(email);
+    setConfirmRemoveType(type);
+  };
+
+  const confirmDisconnect = async () => {
+    if (!confirmRemoveEmail) return;
+    setRemoving(true);
+    try {
+      if (confirmRemoveType === 'outlook') {
+        await disconnectOutlookAccount(confirmRemoveEmail);
+        removeOAcc(confirmRemoveEmail);
+      } else {
+        await disconnectGoogleAccount(confirmRemoveEmail);
+        removeGAcc(confirmRemoveEmail);
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Could not remove account.');
+    } finally {
+      setRemoving(false);
+      setConfirmRemoveEmail(null);
+    }
+  };
+
+  // ── Connect Microsoft Outlook ────────────────────────────────────────────────
+  const handleConnectOutlook = async () => {
+    setConnectingOutlook(true);
+    try {
+      const result = await signInWithMicrosoft();
+      if (result.success === 'redirect') return; // page is redirecting away — keep spinner
+      if (result.success === true) {
+        addOAcc(result.email);
+      } else {
+        Alert.alert('Connection Failed', result.error ?? 'Could not connect Microsoft account.');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Unexpected error connecting Microsoft account.');
+    }
+    setConnectingOutlook(false);
+  };
+
+  // ── Add another Outlook account ──────────────────────────────────────────────
+  const handleAddOutlookAccount = async () => {
+    const result = await addMsAccount();
+    if (result.success === 'redirect') return;
+    if (result.success === true) addOAcc(result.email);
   };
 
   // ── Sign out ────────────────────────────────────────────────────────────────
@@ -416,37 +514,120 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
             </TouchableOpacity>
           </Animated.View>
 
+          {/* ── Google Accounts ─────────────────────────────────────────────── */}
+          <Animated.View style={{ opacity: fadeIn }}>
+            <Text style={s.sectionLabel}>GOOGLE ACCOUNTS</Text>
+            <View style={{ marginBottom: 22 }}>
+              {googleAccounts.length > 0 ? (
+                <>
+                  {googleAccounts.map((email, idx) => (
+                    <View key={email} style={s.accountItem}>
+                      <Text style={s.accountEmail} numberOfLines={1}>{email}</Text>
+                      {idx === 0 && (
+                        <View style={s.accountPrimaryBadge}>
+                          <Text style={s.accountPrimaryText}>Primary</Text>
+                        </View>
+                      )}
+                      <TouchableOpacity
+                        style={s.accountRemoveBtn}
+                        onPress={() => handleDisconnectAccount(email)}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={s.accountRemoveText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <TouchableOpacity
+                    style={s.addAccountBtn}
+                    onPress={handleAddAccount}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={s.addAccountText}>+ Add account</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={[s.accountRow, { backgroundColor: C.surface, borderRadius: 18, borderWidth: 1, borderColor: C.border }]}
+                  onPress={handleConnect}
+                  activeOpacity={0.75}
+                >
+                  <View style={[s.accountIconWrap, { backgroundColor: `${C.verdigris}18` }]}>
+                    {connecting
+                      ? <ActivityIndicator size="small" color={C.verdigris} />
+                      : <Text style={s.accountIconText}>📧</Text>
+                    }
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.accountRowLabel}>Connect Gmail & Calendar</Text>
+                    <Text style={s.accountRowSub}>Auto-detect obligations from inbox</Text>
+                  </View>
+                  <View style={[s.connStatusDot, { backgroundColor: C.textTer }]} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </Animated.View>
+
+          {/* ── Microsoft Outlook Accounts ──────────────────────────────────── */}
+          <Animated.View style={{ opacity: fadeIn }}>
+            <Text style={s.sectionLabel}>MICROSOFT OUTLOOK</Text>
+            <View style={{ marginBottom: 22 }}>
+              {outlookAccounts.length > 0 ? (
+                <>
+                  {outlookAccounts.map((email, idx) => (
+                    <View key={email} style={s.accountItem}>
+                      {/* Microsoft icon */}
+                      <View style={[s.accountIconWrap, { backgroundColor: '#0078D418', marginRight: 10, width: 32, height: 32, borderRadius: 8 }]}>
+                        <Text style={{ fontSize: 16 }}>🟦</Text>
+                      </View>
+                      <Text style={s.accountEmail} numberOfLines={1}>{email}</Text>
+                      {idx === 0 && (
+                        <View style={[s.accountPrimaryBadge, { backgroundColor: '#0078D418' }]}>
+                          <Text style={[s.accountPrimaryText, { color: '#0078D4' }]}>Primary</Text>
+                        </View>
+                      )}
+                      <TouchableOpacity
+                        style={s.accountRemoveBtn}
+                        onPress={() => handleDisconnectAccount(email, 'outlook')}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={s.accountRemoveText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <TouchableOpacity
+                    style={s.addAccountBtn}
+                    onPress={handleAddOutlookAccount}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={s.addAccountText}>+ Add Outlook account</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={[s.accountRow, { backgroundColor: C.surface, borderRadius: 18, borderWidth: 1, borderColor: C.border }]}
+                  onPress={handleConnectOutlook}
+                  activeOpacity={0.75}
+                >
+                  <View style={[s.accountIconWrap, { backgroundColor: '#0078D418' }]}>
+                    {connectingOutlook
+                      ? <ActivityIndicator size="small" color="#0078D4" />
+                      : <Text style={s.accountIconText}>📨</Text>
+                    }
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.accountRowLabel}>Connect Outlook & Calendar</Text>
+                    <Text style={s.accountRowSub}>Sync your Microsoft calendar & emails</Text>
+                  </View>
+                  <View style={[s.connStatusDot, { backgroundColor: C.textTer }]} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </Animated.View>
+
           {/* ── Account ────────────────────────────────────────────────────── */}
           <Animated.View style={{ opacity: fadeIn }}>
             <Text style={s.sectionLabel}>ACCOUNT</Text>
             <View style={s.accountList}>
-
-              {/* Google / Gmail connect */}
-              <TouchableOpacity
-                style={[s.accountRow, s.accountRowBorder]}
-                onPress={googleConnected ? handleDisconnect : handleConnect}
-                activeOpacity={0.75}
-              >
-                <View style={[s.accountIconWrap, { backgroundColor: `${C.verdigris}18` }]}>
-                  {connecting
-                    ? <ActivityIndicator size="small" color={C.verdigris} />
-                    : <Text style={s.accountIconText}>📧</Text>
-                  }
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.accountRowLabel}>
-                    {googleConnected ? 'Gmail Connected' : 'Connect Gmail & Calendar'}
-                  </Text>
-                  {googleConnected
-                    ? <Text style={s.accountRowSub}>{googleEmail}</Text>
-                    : <Text style={s.accountRowSub}>Auto-detect obligations from inbox</Text>
-                  }
-                </View>
-                <View style={[
-                  s.connStatusDot,
-                  { backgroundColor: googleConnected ? C.verdigris : C.textTer },
-                ]} />
-              </TouchableOpacity>
 
               {/* Manage Subscription */}
               <TouchableOpacity
@@ -484,6 +665,55 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
 
       {/* ── Tab Bar ───────────────────────────────────────────────────────────── */}
       <TabBar active="connect" onTab={(sc) => nav.navigate(sc)} />
+
+      {/* ── Remove account confirmation modal ─────────────────────────────── */}
+      <Modal
+        visible={confirmRemoveEmail !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmRemoveEmail(null)}
+      >
+        <View style={dlg.overlay}>
+          <View style={dlg.box}>
+            {/* Header */}
+            <View style={dlg.header}>
+              <View style={dlg.warnIcon}>
+                <Text style={dlg.warnIconText}>!</Text>
+              </View>
+              <Text style={dlg.title}>Remove account</Text>
+            </View>
+
+            <Text style={dlg.message}>
+              Remove{'\n'}
+              <Text style={dlg.emailText}>{confirmRemoveEmail}</Text>
+              {'\n'}from Wyle?{'\n\n'}
+              Calendar events and emails from this account will no longer sync.
+            </Text>
+
+            <View style={dlg.btnRow}>
+              <TouchableOpacity
+                style={dlg.cancelBtn}
+                onPress={() => setConfirmRemoveEmail(null)}
+                activeOpacity={0.8}
+              >
+                <Text style={dlg.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={dlg.removeBtn}
+                onPress={confirmDisconnect}
+                activeOpacity={0.8}
+                disabled={removing}
+              >
+                {removing
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={dlg.removeText}>Remove</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -653,6 +883,35 @@ const s = StyleSheet.create({
   accountRowSub:    { color: C.textSec, fontSize: 11, marginTop: 2 },
   connStatusDot:    { width: 8, height: 8, borderRadius: 4 },
 
+  // ── Multi-account Google UI
+  accountItem: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#1E1E1E', borderRadius: 12,
+    padding: 12, marginBottom: 8,
+    borderWidth: 1, borderColor: '#2A2A2A',
+  },
+  accountEmail: { flex: 1, color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  accountPrimaryBadge: {
+    backgroundColor: '#1B998B20', borderRadius: 6,
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: 1, borderColor: '#1B998B40', marginRight: 8,
+  },
+  accountPrimaryText: { color: '#1B998B', fontSize: 10, fontWeight: '700' },
+  accountRemoveBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#FF3B3015', borderWidth: 1, borderColor: '#FF3B3030',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  accountRemoveText: { color: '#FF3B30', fontSize: 12, fontWeight: '700' },
+  addAccountBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, padding: 12, borderRadius: 12,
+    backgroundColor: '#1E1E1E', borderWidth: 1,
+    borderColor: '#2A2A2A', borderStyle: 'dashed',
+    marginTop: 4,
+  },
+  addAccountText: { color: '#9A9A9A', fontSize: 13, fontWeight: '600' },
+
   // ── Version
   versionText: {
     color: C.textTer, fontSize: 11, textAlign: 'center',
@@ -683,4 +942,39 @@ const s = StyleSheet.create({
   },
   orbWave:    { flexDirection: 'row', alignItems: 'center', gap: 2 },
   orbWaveBar: { width: 2.5, backgroundColor: '#FFFFFF', borderRadius: 2, opacity: 0.9 },
+});
+
+// ── Remove-account confirmation modal styles ──────────────────────────────────
+const dlg = StyleSheet.create({
+  overlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.72)',
+    alignItems: 'center', justifyContent: 'center', padding: 24,
+  },
+  box: {
+    backgroundColor: '#1A1A1A', borderRadius: 20,
+    padding: 24, width: '100%', maxWidth: 360,
+    borderWidth: 1, borderColor: '#2A2A2A',
+  },
+  header:      { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  warnIcon: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: '#FF3B3018', borderWidth: 1, borderColor: '#FF3B3030',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  warnIconText:{ color: '#FF3B30', fontSize: 18, fontWeight: '800' },
+  title:       { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
+  message:     { color: '#9A9A9A', fontSize: 14, lineHeight: 22, marginBottom: 24 },
+  emailText:   { color: '#FFFFFF', fontWeight: '700' },
+  btnRow:      { flexDirection: 'row', gap: 10 },
+  cancelBtn: {
+    flex: 1, paddingVertical: 13, borderRadius: 12,
+    backgroundColor: '#252525', alignItems: 'center',
+    borderWidth: 1, borderColor: '#333',
+  },
+  cancelText:  { color: '#9A9A9A', fontSize: 14, fontWeight: '600' },
+  removeBtn: {
+    flex: 1, paddingVertical: 13, borderRadius: 12,
+    backgroundColor: '#FF3B30', alignItems: 'center',
+  },
+  removeText:  { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
 });

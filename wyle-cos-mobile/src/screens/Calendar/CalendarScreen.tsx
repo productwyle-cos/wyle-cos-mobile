@@ -11,9 +11,42 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { NavProp } from '../../../app/index';
 import {
-  CalendarEvent, ConflictPair, fetchUpcomingEvents,
+  CalendarEvent, ConflictPair, fetchAllAccountsEvents,
   fmtDate, fmtTime, isSameDay, durationMins,
 } from '../../services/calendarService';
+import { getAllGoogleAccounts } from '../../services/googleAuthService';
+import { getAllOutlookAccounts } from '../../services/outlookAuthService';
+
+// ── Per-account colour palette ─────────────────────────────────────────────
+const ACCOUNT_COLORS = [
+  '#4285F4', // Google Blue
+  '#34A853', // Google Green
+  '#FBBC05', // Google Yellow
+  '#EA4335', // Google Red
+  '#9C27B0', // Purple
+  '#FF9800', // Orange
+];
+
+// Microsoft accounts get a fixed Microsoft-blue colour
+const OUTLOOK_COLOR = '#0078D4';
+
+function isOutlookEmail(email: string, outlookAccounts: string[]): boolean {
+  return outlookAccounts.includes(email);
+}
+
+function getAccountColor(email: string, allAccounts: string[], outlookAccounts: string[] = []): string {
+  if (outlookAccounts.includes(email)) return OUTLOOK_COLOR;
+  const idx = allAccounts.indexOf(email);
+  return ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length] ?? '#4285F4';
+}
+
+/** Abbreviate email to initials — e.g. "khavyasakthi1@gmail.com" → "KS" */
+function emailInitials(email: string): string {
+  const name = email.split('@')[0];
+  const parts = name.replace(/[._\-0-9]/g, ' ').trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
 
 // ── Colours ───────────────────────────────────────────────────────────────────
 const C = {
@@ -69,13 +102,15 @@ function EventCard({
   conflicted,
   expanded,
   onToggle,
+  accountColor,
 }: {
   event: CalendarEvent;
   conflicted: boolean;
   expanded: boolean;
   onToggle: () => void;
+  accountColor: string;
 }) {
-  const accentColor = conflicted ? C.crimson : C.verdigris;
+  const accentColor = conflicted ? C.crimson : accountColor;
   const dur = durationMins(event.startTime, event.endTime);
   const durLabel =
     dur >= 60
@@ -88,7 +123,7 @@ function EventCard({
       activeOpacity={0.85}
       style={[s.eventCard, conflicted && s.eventCardConflict]}
     >
-      {/* Left accent bar */}
+      {/* Left accent bar — coloured by account */}
       <View style={[s.accentBar, { backgroundColor: accentColor }]} />
 
       <View style={s.eventBody}>
@@ -143,8 +178,18 @@ function EventCard({
           </View>
         )}
 
-        {/* Expand chevron */}
-        <Text style={s.chevron}>{expanded ? '▲' : '▾'}</Text>
+        {/* Footer: account badge + chevron */}
+        <View style={s.eventFooter}>
+          {event.accountEmail ? (
+            <View style={[s.accountBadge, { backgroundColor: `${accountColor}18`, borderColor: `${accountColor}35` }]}>
+              <View style={[s.accountBadgeDot, { backgroundColor: accountColor }]} />
+              <Text style={[s.accountBadgeText, { color: accountColor }]} numberOfLines={1}>
+                {event.accountEmail}
+              </Text>
+            </View>
+          ) : <View />}
+          <Text style={s.chevron}>{expanded ? '▲' : '▾'}</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -173,12 +218,50 @@ function ConflictBanner({ conflicts }: { conflicts: ConflictPair[] }) {
 }
 
 // ── Empty state ───────────────────────────────────────────────────────────────
-function EmptyState() {
+function EmptyState({
+  googleAccounts,
+  outlookAccounts,
+  daysAhead,
+}: {
+  googleAccounts: string[];
+  outlookAccounts: string[];
+  daysAhead: number;
+}) {
+  const totalAccounts = googleAccounts.length + outlookAccounts.length;
   return (
     <View style={s.emptyWrap}>
       <Text style={s.emptyIcon}>🗓</Text>
       <Text style={s.emptyTitle}>All clear</Text>
-      <Text style={s.emptySub}>No meetings scheduled in the next 7 days</Text>
+      <Text style={s.emptySub}>
+        No meetings scheduled in the next {daysAhead} days
+      </Text>
+
+      {/* Show connected accounts so user knows the calendar was checked */}
+      {totalAccounts > 0 && (
+        <View style={s.emptyAccountsBox}>
+          <Text style={s.emptyAccountsLabel}>CALENDARS CHECKED</Text>
+
+          {googleAccounts.map(email => (
+            <View key={email} style={s.emptyAccountRow}>
+              <View style={[s.emptyAccountDot, { backgroundColor: '#4285F4' }]} />
+              <Text style={s.emptyAccountText} numberOfLines={1}>{email}</Text>
+              <View style={s.emptyAccountBadge}>
+                <Text style={s.emptyAccountBadgeText}>Google</Text>
+              </View>
+            </View>
+          ))}
+
+          {outlookAccounts.map(email => (
+            <View key={email} style={s.emptyAccountRow}>
+              <View style={[s.emptyAccountDot, { backgroundColor: OUTLOOK_COLOR }]} />
+              <Text style={s.emptyAccountText} numberOfLines={1}>{email}</Text>
+              <View style={[s.emptyAccountBadge, { backgroundColor: `${OUTLOOK_COLOR}20`, borderColor: `${OUTLOOK_COLOR}40` }]}>
+                <Text style={[s.emptyAccountBadgeText, { color: OUTLOOK_COLOR }]}>Outlook</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
     </View>
   );
 }
@@ -217,25 +300,43 @@ const tab = StyleSheet.create({
 export default function CalendarScreen({ navigation }: { navigation: NavProp }) {
   const nav = navigation ?? { navigate: (_: any) => {}, goBack: () => {} };
 
-  const [events,    setEvents]    = useState<CalendarEvent[]>([]);
-  const [conflicts, setConflicts] = useState<ConflictPair[]>([]);
-  const [loading,   setLoading]   = useState(true);
-  const [refreshing,setRefreshing]= useState(false);
-  const [error,     setError]     = useState<string | null>(null);
-  const [expanded,  setExpanded]  = useState<Set<string>>(new Set());
-  const [daysAhead, setDaysAhead] = useState(7);
+  const [allEvents,   setAllEvents]   = useState<CalendarEvent[]>([]);
+  const [conflicts,   setConflicts]   = useState<ConflictPair[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [refreshing,  setRefreshing]  = useState(false);
+  const [error,       setError]       = useState<string | null>(null);
+  const [expanded,    setExpanded]    = useState<Set<string>>(new Set());
+  const [daysAhead,   setDaysAhead]   = useState(7);
+  const [accounts,         setAccounts]         = useState<string[]>([]);   // Google
+  const [outlookAccts,     setOutlookAccts]     = useState<string[]>([]);   // Outlook
+  const [activeAcct,       setActiveAcct]       = useState<string>('all');  // 'all' or email
 
   const fadeIn = useRef(new Animated.Value(0)).current;
+
+  // Load all connected accounts on mount
+  useEffect(() => {
+    getAllGoogleAccounts().then(setAccounts);
+    setOutlookAccts(getAllOutlookAccounts());
+  }, []);
 
   const load = useCallback(async (days = daysAhead, quiet = false) => {
     if (!quiet) setLoading(true);
     setError(null);
-    const result = await fetchUpcomingEvents(days);
-    if (result.error) {
-      setError(result.error);
-    } else {
-      setEvents(result.events);
-      setConflicts(result.conflicts);
+    try {
+      const result = await fetchAllAccountsEvents(days);
+      setAllEvents(result);
+      // simple conflict detection across all events
+      const sorted = [...result].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+      const pairs: ConflictPair[] = [];
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const a = sorted[i], b = sorted[i + 1];
+        if (!a.isAllDay && !b.isAllDay && a.endTime > b.startTime) {
+          pairs.push({ a, b });
+        }
+      }
+      setConflicts(pairs);
+    } catch (e: any) {
+      setError(e?.message ?? 'Could not load calendar events.');
     }
     setLoading(false);
     setRefreshing(false);
@@ -244,10 +345,7 @@ export default function CalendarScreen({ navigation }: { navigation: NavProp }) 
 
   useEffect(() => { load(); }, []);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    load(daysAhead, true);
-  };
+  const onRefresh = () => { setRefreshing(true); load(daysAhead, true); };
 
   const toggleExpand = (id: string) => {
     setExpanded(prev => {
@@ -257,10 +355,12 @@ export default function CalendarScreen({ navigation }: { navigation: NavProp }) 
     });
   };
 
-  const changeDays = (d: number) => {
-    setDaysAhead(d);
-    load(d);
-  };
+  const changeDays = (d: number) => { setDaysAhead(d); load(d); };
+
+  // Filter events by active account tab
+  const events = activeAcct === 'all'
+    ? allEvents
+    : allEvents.filter(e => e.accountEmail === activeAcct);
 
   const groups = groupByDay(events);
   const todayCount = events.filter(e => isToday(e.startTime)).length;
@@ -278,7 +378,7 @@ export default function CalendarScreen({ navigation }: { navigation: NavProp }) 
           <View style={{ flex: 1 }}>
             <Text style={s.headerTitle}>My Schedule</Text>
             <Text style={s.headerSub}>
-              {loading ? 'Loading…' : `${events.length} meetings · ${conflicts.length} conflict${conflicts.length !== 1 ? 's' : ''}`}
+              {loading ? 'Loading…' : `${events.length} meetings · ${accounts.length + outlookAccts.length} account${(accounts.length + outlookAccts.length) !== 1 ? 's' : ''} · ${conflicts.length} conflict${conflicts.length !== 1 ? 's' : ''}`}
             </Text>
           </View>
           {/* Today badge */}
@@ -288,6 +388,73 @@ export default function CalendarScreen({ navigation }: { navigation: NavProp }) 
             </View>
           )}
         </View>
+
+        {/* ── Account filter tabs ────────────────────────────────────────── */}
+        {(accounts.length + outlookAccts.length) > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={s.acctFilterScroll}
+            contentContainerStyle={s.acctFilterRow}
+          >
+            {/* All tab */}
+            <TouchableOpacity
+              style={[s.acctTab, activeAcct === 'all' && s.acctTabActive]}
+              onPress={() => setActiveAcct('all')}
+              activeOpacity={0.8}
+            >
+              <Text style={[s.acctTabText, activeAcct === 'all' && s.acctTabTextActive]}>
+                All  ({allEvents.length})
+              </Text>
+            </TouchableOpacity>
+
+            {/* Google account tabs */}
+            {accounts.map(email => {
+              const color    = getAccountColor(email, accounts, outlookAccts);
+              const count    = allEvents.filter(e => e.accountEmail === email).length;
+              const isActive = activeAcct === email;
+              return (
+                <TouchableOpacity
+                  key={email}
+                  style={[s.acctTab, { borderColor: isActive ? color : C.border },
+                    isActive && { backgroundColor: `${color}20` }]}
+                  onPress={() => setActiveAcct(email)}
+                  activeOpacity={0.8}
+                >
+                  <View style={[s.acctTabDot, { backgroundColor: color }]} />
+                  <Text style={[s.acctTabText, isActive && { color }]} numberOfLines={1}>
+                    {email.split('@')[0]}  ({count})
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+
+            {/* Outlook account tabs */}
+            {outlookAccts.map(email => {
+              const color    = OUTLOOK_COLOR;
+              const count    = allEvents.filter(e => e.accountEmail === email).length;
+              const isActive = activeAcct === email;
+              return (
+                <TouchableOpacity
+                  key={email}
+                  style={[s.acctTab, { borderColor: isActive ? color : C.border },
+                    isActive && { backgroundColor: `${color}20` }]}
+                  onPress={() => setActiveAcct(email)}
+                  activeOpacity={0.8}
+                >
+                  <View style={[s.acctTabDot, { backgroundColor: color }]} />
+                  <Text style={[s.acctTabText, isActive && { color }]} numberOfLines={1}>
+                    {email.split('@')[0]}  ({count})
+                  </Text>
+                  {/* Outlook pill */}
+                  <View style={[s.acctTabOutlookPill]}>
+                    <Text style={s.acctTabOutlookText}>M</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
 
         {/* ── Day range selector ─────────────────────────────────────────── */}
         <View style={s.rangeRow}>
@@ -342,7 +509,11 @@ export default function CalendarScreen({ navigation }: { navigation: NavProp }) 
             </View>
 
             {events.length === 0 ? (
-              <EmptyState />
+              <EmptyState
+                googleAccounts={accounts}
+                outlookAccounts={outlookAccts}
+                daysAhead={daysAhead}
+              />
             ) : (
               groups.map(([dayKey, dayEvents]) => {
                 const dayDate = dayEvents[0].startTime;
@@ -374,6 +545,7 @@ export default function CalendarScreen({ navigation }: { navigation: NavProp }) 
                         conflicted={isConflicted(ev, conflicts)}
                         expanded={expanded.has(ev.id)}
                         onToggle={() => toggleExpand(ev.id)}
+                        accountColor={getAccountColor(ev.accountEmail ?? '', accounts, outlookAccts)}
                       />
                     ))}
                   </View>
@@ -413,6 +585,41 @@ const s = StyleSheet.create({
   },
   todayBadgeText: { color: C.chartreuse, fontSize: 12, fontWeight: '700' },
 
+  // ── Account filter tabs
+  acctFilterScroll: { flexGrow: 0, borderBottomWidth: 1, borderBottomColor: C.border },
+  acctFilterRow: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: 8, paddingHorizontal: 16, paddingVertical: 10,
+  },
+  acctTab: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 999, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surfaceEl,
+  },
+  acctTabActive: {},
+  acctTabDot:  { width: 7, height: 7, borderRadius: 4 },
+  acctTabText: { color: C.textSec, fontSize: 12, fontWeight: '600' },
+  acctTabTextActive: { fontWeight: '700' },
+  acctTabOutlookPill: {
+    backgroundColor: '#0078D420', borderRadius: 4,
+    paddingHorizontal: 4, paddingVertical: 1, marginLeft: 3,
+  },
+  acctTabOutlookText: { color: '#0078D4', fontSize: 9, fontWeight: '800' },
+
+  // ── Event footer (account badge + chevron)
+  eventFooter: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', marginTop: 6,
+  },
+  accountBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3,
+    borderWidth: 1, maxWidth: '80%',
+  },
+  accountBadgeDot: { width: 5, height: 5, borderRadius: 3 },
+  accountBadgeText: { fontSize: 10, fontWeight: '600', letterSpacing: 0.1 },
+
   // ── Day range tabs
   rangeRow: {
     flexDirection: 'row', gap: 8,
@@ -441,6 +648,28 @@ const s = StyleSheet.create({
   emptyIcon:  { fontSize: 48 },
   emptyTitle: { color: C.white, fontSize: 20, fontWeight: '700' },
   emptySub:   { color: C.textSec, fontSize: 14, textAlign: 'center' },
+  emptyAccountsBox: {
+    marginTop: 20, width: '100%',
+    backgroundColor: C.surface, borderRadius: 14,
+    padding: 16, gap: 10,
+    borderWidth: 1, borderColor: C.border,
+  },
+  emptyAccountsLabel: {
+    color: C.textTer, fontSize: 10, fontWeight: '800', letterSpacing: 1.5, marginBottom: 4,
+  },
+  emptyAccountRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+  emptyAccountDot: { width: 8, height: 8, borderRadius: 4 },
+  emptyAccountText: {
+    flex: 1, color: C.white, fontSize: 13, fontWeight: '500',
+  },
+  emptyAccountBadge: {
+    backgroundColor: '#4285F420', borderRadius: 6,
+    paddingHorizontal: 7, paddingVertical: 3,
+    borderWidth: 1, borderColor: '#4285F440',
+  },
+  emptyAccountBadgeText: { color: '#4285F4', fontSize: 10, fontWeight: '700' },
 
   // ── Day groups
   dayGroup: { paddingHorizontal: 16, marginBottom: 8 },

@@ -16,8 +16,10 @@ import type { NavProp } from '../../../app/index';
 import { useAppStore } from '../../store';
 import { UIObligation } from '../../types';
 import { generateBrief, getBriefKey, getBriefTimeOfDay, isBriefStale } from '../../services/briefService';
+import { saveMorningSnapshot, getDayProgress } from '../../services/snapshotService';
 import { signInWithGoogle, isGoogleConnected, handleGoogleOAuthCallback } from '../../services/googleAuthService';
-import { runFullSignalScan } from '../../services/signalService';
+import { handleOutlookOAuthCallback, isOutlookConnected } from '../../services/outlookAuthService';
+import { runMultiAccountSignalScan } from '../../services/signalService';
 
 const { width } = Dimensions.get('window');
 
@@ -330,12 +332,15 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
   const setGoogleConnected = useAppStore(st => st.setGoogleConnected);
   const setGoogleEmail     = useAppStore(st => st.setGoogleEmail);
 
-  const [userName,        setUserName]        = useState('');
-  const [timeStr,         setTimeStr]         = useState(getTimeString());
-  const [greeting,        setGreeting]        = useState(getGreeting());
-  const [briefLoading,    setBriefLoading]    = useState(false);
+  const [userName,         setUserName]         = useState('');
+  const [timeStr,          setTimeStr]          = useState(getTimeString());
+  const [greeting,         setGreeting]         = useState(getGreeting());
+  const [briefLoading,     setBriefLoading]     = useState(false);
   const [googleConnecting, setGoogleConnecting] = useState(false);
-  const [scanSummary,     setScanSummary]     = useState<string | null>(null);
+  const [scanSummary,      setScanSummary]      = useState<string | null>(null);
+  const [scanning,         setScanning]         = useState(false);
+  const [outlookConnected, setOutlookConnected] = useState(false);
+  const sessionScannedRef = useRef(false); // prevent double-scan on re-renders
 
   const fadeIn        = useRef(new Animated.Value(0)).current;
   const slideUp       = useRef(new Animated.Value(20)).current;
@@ -370,16 +375,42 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       }
     });
 
+    // ── Check Outlook connection state ────────────────────────────────────────
+    const { connected: olConnected } = isOutlookConnected();
+    if (olConnected) setOutlookConnected(true);
+
+    // ── Web: handle Outlook OAuth callback (takes priority if provider=microsoft) ──
+    handleOutlookOAuthCallback().then(async olResult => {
+      if (olResult && olResult.success === true) {
+        setOutlookConnected(true);
+        // Scan the newly connected Outlook account immediately
+        try {
+          const scan = await runMultiAccountSignalScan(
+            useAppStore.getState().obligations.filter(o => o.status !== 'completed'),
+          );
+          if (scan.obligations.length > 0) {
+            useAppStore.getState().addObligations(scan.obligations);
+          }
+          setScanSummary(scan.summary);
+          Alert.alert('Outlook Connected ✓', `Signed in as ${olResult.email}.\n\n${scan.summary}`);
+          sessionScannedRef.current = true;
+        } catch {
+          Alert.alert('Outlook Connected ✓', `Signed in as ${olResult.email}.\nInbox scan will run in the background.`);
+        }
+      } else if (olResult && olResult.success === false) {
+        Alert.alert('Outlook sign-in failed', olResult.error);
+      }
+    });
+
     // ── Web: complete OAuth redirect callback (if returning from Google) ──────
     // Must run BEFORE isGoogleConnected so the new token is in storage first.
     handleGoogleOAuthCallback().then(async callbackResult => {
       if (callbackResult && callbackResult.success === true) {
         setGoogleConnected(true);
         setGoogleEmail(callbackResult.email);
-        // Background inbox/calendar scan
+        // Scan all accounts after new Google account connected
         try {
-          const scan = await runFullSignalScan(
-            callbackResult.accessToken,
+          const scan = await runMultiAccountSignalScan(
             useAppStore.getState().obligations.filter(o => o.status !== 'completed'),
           );
           if (scan.obligations.length > 0) {
@@ -387,6 +418,7 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
           }
           setScanSummary(scan.summary);
           Alert.alert('Connected ✓', `Signed in as ${callbackResult.email}.\n\n${scan.summary}`);
+          sessionScannedRef.current = true;
         } catch {
           Alert.alert('Connected ✓', `Signed in as ${callbackResult.email}.\nCalendar & Gmail synced.`);
         }
@@ -395,8 +427,30 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       }
 
       // Always re-check stored token after potential callback
-      isGoogleConnected().then(({ connected, email }) => {
-        if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
+      isGoogleConnected().then(async ({ connected, email }) => {
+        if (connected) {
+          setGoogleConnected(true);
+          setGoogleEmail(email);
+
+          // ── Auto-scan on app open (once per session, silent) ────────────────
+          if (!sessionScannedRef.current) {
+            sessionScannedRef.current = true;
+            try {
+              setScanning(true);
+              const scan = await runMultiAccountSignalScan(
+                useAppStore.getState().obligations.filter(o => o.status !== 'completed'),
+              );
+              if (scan.obligations.length > 0) {
+                useAppStore.getState().addObligations(scan.obligations);
+              }
+              setScanSummary(scan.summary);
+            } catch {
+              // Silent fail — don't interrupt UX
+            } finally {
+              setScanning(false);
+            }
+          }
+        }
       });
     });
 
@@ -412,13 +466,26 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       Animated.spring(slideUp, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true }),
     ]).start();
 
-    // Generate brief once per period
+    // Generate brief once per period (morning or evening)
     if (isBriefStale(lastBriefKey)) {
       setBriefLoading(true);
-      generateBrief(obligations, MOCK_STATS.reliable)
-        .then(brief => { setMorningBrief(brief); setLastBriefKey(getBriefKey()); })
-        .catch(() => {})
-        .finally(() => setBriefLoading(false));
+      const isEvening = getBriefTimeOfDay() === 'evening';
+
+      if (!isEvening) {
+        // Morning: save today's obligation snapshot FIRST, then generate brief
+        saveMorningSnapshot(obligations).catch(() => {});
+        generateBrief(obligations, MOCK_STATS.reliable)
+          .then(brief => { setMorningBrief(brief); setLastBriefKey(getBriefKey()); })
+          .catch(() => {})
+          .finally(() => setBriefLoading(false));
+      } else {
+        // Evening: load day progress (completed vs pending) then generate brief
+        getDayProgress(obligations)
+          .then(dayProgress => generateBrief(obligations, MOCK_STATS.reliable, dayProgress))
+          .then(brief => { setMorningBrief(brief); setLastBriefKey(getBriefKey()); })
+          .catch(() => {})
+          .finally(() => setBriefLoading(false));
+      }
     }
 
     return () => clearInterval(tick);
@@ -459,14 +526,14 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       setGoogleConnected(true);
       setGoogleEmail(result.email);
 
-      // Background: parse Gmail + Calendar → add obligations to store
+      // Background: parse Gmail + Calendar + all connected accounts → add obligations
       try {
-        const scan = await runFullSignalScan(
-          result.accessToken,
+        const scan = await runMultiAccountSignalScan(
           obligations.filter(o => o.status !== 'completed'),
         );
         if (scan.obligations.length > 0) addObligations(scan.obligations);
         setScanSummary(scan.summary);
+        sessionScannedRef.current = true;
         Alert.alert('Connected ✓', `Signed in as ${result.email}.\n\n${scan.summary}`);
       } catch {
         Alert.alert('Connected ✓', `Signed in as ${result.email}.\nInbox scan will run in the background.`);
@@ -475,6 +542,27 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       Alert.alert('Error', err?.message ?? 'Something went wrong. Please try again.');
     } finally {
       setGoogleConnecting(false);
+    }
+  };
+
+  // ── Manual inbox scan ────────────────────────────────────────────────────
+  const handleManualScan = async () => {
+    if (scanning) return;
+    setScanning(true);
+    setScanSummary(null);
+    try {
+      const scan = await runMultiAccountSignalScan(
+        obligations.filter(o => o.status !== 'completed'),
+      );
+      if (scan.obligations.length > 0) addObligations(scan.obligations);
+      setScanSummary(scan.summary);
+      if (scan.obligations.length > 0) {
+        Alert.alert('Inbox Scan Complete', scan.summary);
+      }
+    } catch (e: any) {
+      Alert.alert('Scan failed', e?.message ?? 'Could not scan inbox. Please try again.');
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -491,10 +579,20 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
 
     if (briefLoading) return; // already in-flight
     setBriefLoading(true);
-    generateBrief(obligations, MOCK_STATS.reliable)
-      .then(b => { setMorningBrief(b); setLastBriefKey(getBriefKey()); })
-      .catch(() => {})
-      .finally(() => setBriefLoading(false));
+    const isEvening = getBriefTimeOfDay() === 'evening';
+    if (!isEvening) {
+      saveMorningSnapshot(obligations).catch(() => {});
+      generateBrief(obligations, MOCK_STATS.reliable)
+        .then(b => { setMorningBrief(b); setLastBriefKey(getBriefKey()); })
+        .catch(() => {})
+        .finally(() => setBriefLoading(false));
+    } else {
+      getDayProgress(obligations)
+        .then(dp => generateBrief(obligations, MOCK_STATS.reliable, dp))
+        .then(b  => { setMorningBrief(b); setLastBriefKey(getBriefKey()); })
+        .catch(() => {})
+        .finally(() => setBriefLoading(false));
+    }
   }, [obligations]);
 
   return (
@@ -594,65 +692,238 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
             </Text>
           </Animated.View>
         ) : (
-          /* Connected state — tap to open calendar view */
-          <Animated.View style={{ opacity: fadeIn }}>
+          /* ── Google connected banner ── */
+          <Animated.View style={[s.gBanner, { opacity: fadeIn }]}>
             <TouchableOpacity
-              style={s.googleConnectedCard}
+              style={s.gBannerInner}
               onPress={() => nav.navigate('calendar')}
-              activeOpacity={0.85}
+              activeOpacity={0.82}
             >
-              <View style={s.googleConnectedIcon}>
-                <Text style={{ fontSize: 16 }}>📅</Text>
+              {/* Left: Google G logo inside a white circle */}
+              <View style={s.gLogoCircle}>
+                <SvgXml xml={GOOGLE_G_SVG} width={20} height={20} />
               </View>
+
+              {/* Centre: text block */}
               <View style={{ flex: 1 }}>
-                <Text style={s.googleConnectedTitle}>Calendar & Gmail connected</Text>
-                <Text style={s.googleConnectedSub}>Tap to view upcoming meetings · {googleEmail}</Text>
+                {/* "Connected with Google" pill row */}
+                <View style={s.gBannerTitleRow}>
+                  <View style={s.gConnectedPill}>
+                    <View style={s.gConnectedDot} />
+                    <Text style={s.gConnectedPillText}>Connected</Text>
+                  </View>
+                  <Text style={s.gBannerProductText}>Google Workspace</Text>
+                </View>
+
+                {/* Services row */}
+                <View style={s.gServicesRow}>
+                  {/* Gmail chip */}
+                  <View style={s.gServiceChip}>
+                    {/* Gmail "M" mark — red/blue/yellow stripes approximated */}
+                    <View style={s.gMailIcon}>
+                      <View style={[s.gMailStripe, { backgroundColor: '#EA4335' }]} />
+                      <View style={[s.gMailStripe, { backgroundColor: '#FBBC05' }]} />
+                      <View style={[s.gMailStripe, { backgroundColor: '#34A853' }]} />
+                      <View style={[s.gMailStripe, { backgroundColor: '#4285F4' }]} />
+                    </View>
+                    <Text style={s.gServiceLabel}>Gmail</Text>
+                  </View>
+
+                  <View style={s.gServiceDivider} />
+
+                  {/* Calendar chip */}
+                  <View style={s.gServiceChip}>
+                    <View style={s.gCalIcon}>
+                      <View style={s.gCalHeader} />
+                      <View style={s.gCalGrid}>
+                        {[...Array(4)].map((_, i) => (
+                          <View key={i} style={s.gCalDot} />
+                        ))}
+                      </View>
+                    </View>
+                    <Text style={s.gServiceLabel}>Calendar</Text>
+                  </View>
+
+                  <View style={s.gServiceDivider} />
+
+                  {/* Drive chip */}
+                  <View style={s.gServiceChip}>
+                    <View style={s.gDriveIcon}>
+                      <View style={[s.gDriveTriStripe, { backgroundColor: '#4285F4', transform: [{ rotate: '0deg' }] }]} />
+                      <View style={[s.gDriveTriStripe, { backgroundColor: '#34A853', transform: [{ rotate: '120deg' }] }]} />
+                      <View style={[s.gDriveTriStripe, { backgroundColor: '#FBBC05', transform: [{ rotate: '240deg' }] }]} />
+                    </View>
+                    <Text style={s.gServiceLabel}>Drive</Text>
+                  </View>
+                </View>
+
+                {/* Email sub-line */}
+                <Text style={s.gBannerEmail} numberOfLines={1}>{googleEmail}</Text>
               </View>
-              <Text style={s.connectedArrow}>›</Text>
+
+              {/* Right: chevron */}
+              <View style={s.gBannerChevron}>
+                <Text style={s.gBannerChevronText}>›</Text>
+              </View>
             </TouchableOpacity>
+
+            {/* Bottom accent stripe — Google colours */}
+            <View style={s.gBannerStripe}>
+              {(['#4285F4','#EA4335','#FBBC05','#34A853'] as const).map((col, i) => (
+                <View key={i} style={[s.gStripeSegment, { backgroundColor: col }]} />
+              ))}
+            </View>
           </Animated.View>
         )}
 
-        {/* ── Priority Tasks ─────────────────────────────────────────────────── */}
-        <Animated.View style={[s.section, { opacity: fadeIn }]}>
-          <View style={s.sectionRow}>
-            <Text style={s.sectionTitle}>PRIORITY TASKS</Text>
-            <View style={s.activeBadge}>
-              <Text style={s.activeBadgeText}>{activeCount} Active</Text>
+        {/* ── Inbox Scan Banner (shown when any account is connected) ───────── */}
+        {(googleConnected || outlookConnected) && (
+          <Animated.View style={{ opacity: fadeIn, paddingHorizontal: 16, marginBottom: 12 }}>
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+              backgroundColor: C.surface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
+              borderWidth: 1, borderColor: C.border,
+            }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: C.textSec, fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
+                  {scanning ? 'SCANNING INBOX…' : 'INBOX SCAN'}
+                </Text>
+                {scanSummary ? (
+                  <Text style={{ color: C.white, fontSize: 12, marginTop: 2 }} numberOfLines={2}>
+                    {scanSummary}
+                  </Text>
+                ) : (
+                  <Text style={{ color: C.textTer, fontSize: 12, marginTop: 2 }}>
+                    Tap to scan Gmail{outlookConnected ? ' + Outlook' : ''} for action items
+                  </Text>
+                )}
+              </View>
+              <TouchableOpacity
+                onPress={handleManualScan}
+                disabled={scanning}
+                style={{
+                  backgroundColor: scanning ? C.surfaceEl : C.verdigris,
+                  borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7, marginLeft: 10,
+                }}
+              >
+                {scanning
+                  ? <ActivityIndicator color={C.textSec} size="small" />
+                  : <Text style={{ color: C.bg, fontSize: 12, fontWeight: '700' }}>Scan</Text>
+                }
+              </TouchableOpacity>
             </View>
-          </View>
+          </Animated.View>
+        )}
 
-          {featuredTask && (
-            <FeaturedTaskCard item={featuredTask} onPress={() => nav.navigate('obligations')} />
-          )}
+        {/* ── Priority Tasks + Ready to Execute ─────────────────────────────── */}
+        {activeCount === 0 ? (
+          /* ── Empty state: no tasks yet ──────────────────────────────────── */
+          <Animated.View style={[s.section, { opacity: fadeIn }]}>
+            <View style={s.stackClearCard}>
 
-          {/* 2-column grid for remaining tasks */}
-          {gridTasks.length > 0 && (
-            <View style={s.taskGrid}>
-              {gridTasks.map(item => (
-                <SmallTaskCard key={item.id} item={item} onPress={() => nav.navigate('obligations')} />
-              ))}
+              {/* Top row: icon + headline */}
+              <View style={s.stackClearTop}>
+                <View style={s.stackClearIconWrap}>
+                  {/* Stacked "layers" icon made from 3 horizontal bars */}
+                  <View style={[s.stackBar, { width: 22, opacity: 1 }]} />
+                  <View style={[s.stackBar, { width: 16, opacity: 0.55 }]} />
+                  <View style={[s.stackBar, { width: 10, opacity: 0.25 }]} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.stackClearTitle}>Your stack is clear</Text>
+                  <Text style={s.stackClearSub}>
+                    No pending obligations right now. Add tasks and Wyle will
+                    surface the most urgent ones here — with step-by-step
+                    actions ready to execute.
+                  </Text>
+                </View>
+              </View>
+
+              {/* Preview pills — shows what sections will look like */}
+              <View style={s.stackPreviewRow}>
+                <View style={s.stackPreviewPill}>
+                  <View style={s.stackPreviewDot} />
+                  <Text style={s.stackPreviewLabel}>Priority Tasks</Text>
+                </View>
+                <View style={s.stackPreviewPill}>
+                  <View style={[s.stackPreviewDot, { backgroundColor: C.chartreuse }]} />
+                  <Text style={s.stackPreviewLabel}>Ready to Execute</Text>
+                </View>
+              </View>
+
+              {/* Divider */}
+              <View style={s.stackClearDivider} />
+
+              {/* CTAs */}
+              <TouchableOpacity
+                style={s.stackClearPrimaryBtn}
+                onPress={() => nav.navigate('obligations')}
+                activeOpacity={0.85}
+              >
+                <LinearGradient
+                  colors={[C.verdigris, '#16A085']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={s.stackClearBtnGrad}
+                >
+                  <Text style={s.stackClearPrimaryText}>Add your first task  →</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={s.stackClearSecondaryBtn}
+                onPress={() => nav.navigate('buddy')}
+                activeOpacity={0.85}
+              >
+                <Text style={s.stackClearSecondaryText}>🎙️  Voice Brain Dump with Buddy</Text>
+              </TouchableOpacity>
+
             </View>
-          )}
-        </Animated.View>
+          </Animated.View>
+        ) : (
+          <>
+            {/* ── Priority Tasks ──────────────────────────────────────────── */}
+            <Animated.View style={[s.section, { opacity: fadeIn }]}>
+              <View style={s.sectionRow}>
+                <Text style={s.sectionTitle}>PRIORITY TASKS</Text>
+                <View style={s.activeBadge}>
+                  <Text style={s.activeBadgeText}>{activeCount} Active</Text>
+                </View>
+              </View>
 
-        {/* ── Ready to Execute ───────────────────────────────────────────────── */}
-        <Animated.View style={[s.section, { opacity: fadeIn }]}>
-          <View style={s.sectionRow}>
-            <Text style={s.sectionTitle}>READY TO EXECUTE</Text>
-            <View style={s.activeBadge}>
-              <Text style={s.activeBadgeText}>{executeItems.length}</Text>
-            </View>
-          </View>
-          {executeItems.map(item => (
-            <ExecuteCard
-              key={item.id}
-              item={item}
-              onApprove={() => nav.navigate('buddy')}
-              onReview={() => nav.navigate('buddy')}
-            />
-          ))}
-        </Animated.View>
+              {featuredTask && (
+                <FeaturedTaskCard item={featuredTask} onPress={() => nav.navigate('obligations')} />
+              )}
+
+              {gridTasks.length > 0 && (
+                <View style={s.taskGrid}>
+                  {gridTasks.map(item => (
+                    <SmallTaskCard key={item.id} item={item} onPress={() => nav.navigate('obligations')} />
+                  ))}
+                </View>
+              )}
+            </Animated.View>
+
+            {/* ── Ready to Execute ─────────────────────────────────────────── */}
+            {executeItems.length > 0 && (
+              <Animated.View style={[s.section, { opacity: fadeIn }]}>
+                <View style={s.sectionRow}>
+                  <Text style={s.sectionTitle}>READY TO EXECUTE</Text>
+                  <View style={s.activeBadge}>
+                    <Text style={s.activeBadgeText}>{executeItems.length}</Text>
+                  </View>
+                </View>
+                {executeItems.map(item => (
+                  <ExecuteCard
+                    key={item.id}
+                    item={item}
+                    onApprove={() => nav.navigate('buddy')}
+                    onReview={() => nav.navigate('buddy')}
+                  />
+                ))}
+              </Animated.View>
+            )}
+          </>
+        )}
 
         {/* ── Quick Actions ──────────────────────────────────────────────────── */}
         <Animated.View style={[s.section, { opacity: fadeIn }]}>
@@ -733,6 +1004,52 @@ const s = StyleSheet.create({
   urgentSub:      { color: C.textSec, fontSize: 13, marginBottom: 16 },
   urgentBtn:      { borderRadius: 999, paddingVertical: 14, alignItems: 'center' },
   urgentBtnText:  { color: C.white, fontSize: 15, fontWeight: '700' },
+
+  // ── "Stack clear" empty state card ───────────────────────────────────────
+  stackClearCard: {
+    backgroundColor: C.surface,
+    borderRadius: 20, borderWidth: 1, borderColor: C.border,
+    padding: 20, gap: 14,
+  },
+  stackClearTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 14 },
+  stackClearIconWrap: {
+    width: 44, height: 44, borderRadius: 14,
+    backgroundColor: `${C.verdigris}14`,
+    borderWidth: 1, borderColor: `${C.verdigris}30`,
+    alignItems: 'center', justifyContent: 'center',
+    gap: 4, flexShrink: 0,
+  },
+  stackBar: {
+    height: 3, borderRadius: 2, backgroundColor: C.verdigris,
+  },
+  stackClearTitle: { color: C.white, fontSize: 16, fontWeight: '700', marginBottom: 6 },
+  stackClearSub:   { color: C.textSec, fontSize: 13, lineHeight: 20 },
+
+  // Preview pills
+  stackPreviewRow: { flexDirection: 'row', gap: 10 },
+  stackPreviewPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: C.surfaceEl, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: C.border,
+  },
+  stackPreviewDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.verdigris },
+  stackPreviewLabel: { color: C.textTer, fontSize: 11, fontWeight: '600' },
+
+  stackClearDivider: { height: 1, backgroundColor: C.border },
+
+  // Buttons
+  stackClearPrimaryBtn: { borderRadius: 14, overflow: 'hidden' },
+  stackClearBtnGrad: {
+    paddingVertical: 14, alignItems: 'center', borderRadius: 14,
+  },
+  stackClearPrimaryText: { color: C.white, fontSize: 14, fontWeight: '700' },
+  stackClearSecondaryBtn: {
+    paddingVertical: 12, alignItems: 'center',
+    backgroundColor: C.surfaceEl, borderRadius: 14,
+    borderWidth: 1, borderColor: C.border,
+  },
+  stackClearSecondaryText: { color: C.textSec, fontSize: 13, fontWeight: '600' },
 
   // ── Section headers
   section:    { paddingHorizontal: 16, marginBottom: 22 },
@@ -842,22 +1159,107 @@ const s = StyleSheet.create({
   googleCardSub: {
     color: C.textTer, fontSize: 10, marginTop: 8, textAlign: 'center',
   },
-  // Connected state
-  googleConnectedCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: `${C.verdigris}0D`,
-    borderRadius: 14, padding: 14,
+  // ── Google connected banner ───────────────────────────────────────────────
+  gBanner: {
     marginHorizontal: 16, marginBottom: 14,
-    borderWidth: 1, borderColor: `${C.verdigris}35`,
+    borderRadius: 16, overflow: 'hidden',
+    backgroundColor: '#0F1923',          // very dark blue-tinted surface
+    borderWidth: 1, borderColor: '#1E2D3D',
+    elevation: 4,
+    shadowColor: '#4285F4',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
   },
-  googleConnectedIcon: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: `${C.verdigris}22`,
+  gBannerInner: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 14, gap: 12,
+  },
+
+  // Google G circle
+  gLogoCircle: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+    elevation: 2,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15, shadowRadius: 3,
+  },
+
+  // Title row
+  gBannerTitleRow: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: 8, marginBottom: 8,
+  },
+  gConnectedPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#1A3A2A',
+    borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: '#34A85340',
+  },
+  gConnectedDot: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: '#34A853',
+  },
+  gConnectedPillText: { color: '#34A853', fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
+  gBannerProductText: { color: '#5F6368', fontSize: 10, fontWeight: '600', letterSpacing: 0.2 },
+
+  // Services row — Gmail · Calendar · Drive chips
+  gServicesRow: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: 6, marginBottom: 7,
+  },
+  gServiceChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#1A1F2E',
+    borderRadius: 6, paddingHorizontal: 7, paddingVertical: 4,
+    borderWidth: 1, borderColor: '#2A3040',
+  },
+  gServiceLabel: { color: '#9AA0A6', fontSize: 10, fontWeight: '600' },
+  gServiceDivider: { width: 1, height: 14, backgroundColor: '#2A3040' },
+
+  // Gmail stripe icon
+  gMailIcon: {
+    flexDirection: 'row', width: 12, height: 10,
+    borderRadius: 2, overflow: 'hidden',
+  },
+  gMailStripe: { flex: 1 },
+
+  // Calendar mini icon
+  gCalIcon: {
+    width: 12, height: 12, borderRadius: 2,
+    backgroundColor: '#FFFFFF', overflow: 'hidden',
+  },
+  gCalHeader: { height: 4, backgroundColor: '#4285F4' },
+  gCalGrid:   { flex: 1, flexDirection: 'row', flexWrap: 'wrap', padding: 1, gap: 1 },
+  gCalDot:    { width: 3, height: 3, backgroundColor: '#EA4335', borderRadius: 0.5 },
+
+  // Drive triangle icon (simplified as 3 overlapping stripes)
+  gDriveIcon: {
+    width: 13, height: 12,
     alignItems: 'center', justifyContent: 'center',
   },
-  googleConnectedTitle: { color: C.verdigris, fontSize: 13, fontWeight: '700', marginBottom: 2 },
-  googleConnectedSub:   { color: C.textSec, fontSize: 11 },
-  connectedArrow: { color: C.chartreuse, fontSize: 20, fontWeight: '300' },
+  gDriveTriStripe: {
+    position: 'absolute', width: 8, height: 3, borderRadius: 1,
+  },
+
+  // Email line
+  gBannerEmail: { color: '#5F6368', fontSize: 10, letterSpacing: 0.1 },
+
+  // Chevron
+  gBannerChevron: {
+    width: 26, height: 26, borderRadius: 8,
+    backgroundColor: '#1A1F2E',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#2A3040',
+  },
+  gBannerChevronText: { color: '#5F6368', fontSize: 16, fontWeight: '300', lineHeight: 22 },
+
+  // Bottom 4-colour Google stripe
+  gBannerStripe: {
+    flexDirection: 'row', height: 3,
+  },
+  gStripeSegment: { flex: 1 },
 
   // ── Tab bar
   tabBar: {

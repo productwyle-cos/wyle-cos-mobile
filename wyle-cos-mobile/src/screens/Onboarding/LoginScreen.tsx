@@ -193,25 +193,38 @@ export default function LoginScreen({ navigation }: { navigation: NavProp }) {
 
     setGoogleLoading(true);
     setError('');
+    let isRedirecting = false;
     try {
       const { signInWithGoogle } = await import('@services/googleAuthService');
       const result = await signInWithGoogle();
+
+      if (result.success === 'redirect') {
+        // Web: the page is already navigating to Google's sign-in page.
+        // Keep the spinner visible — the user will be redirected away shortly.
+        // app/index.tsx handles the return callback and completes sign-in.
+        isRedirecting = true;
+        return;
+      }
+
       if (!result.success) {
         if (result.error !== 'Cancelled') setError(result.error || 'Google sign-in failed.');
         return;
       }
-      await AsyncStorage.setItem('wyle_token', 'google_token_demo');
+
+      // ── Native only: sign-in completed inline ──────────────────────────────
+      await AsyncStorage.setItem('wyle_token', 'google_auth_token');
       await AsyncStorage.setItem('wyle_user', JSON.stringify({
-        _id: 'g1',
-        name: result.email.split('@')[0] || 'Google User',
-        email: result.email,
+        _id:                'g_' + result.email.replace(/[^a-z0-9]/gi, ''),
+        name:               result.email.split('@')[0] || 'Wyle User',
+        email:              result.email,
         onboardingComplete: true,
       }));
       navigation.navigate('preparation');
     } catch (e: any) {
       setError(e?.message || 'Google sign-in failed. Try again.');
     } finally {
-      setGoogleLoading(false);
+      // Don't reset the spinner if we're mid-redirect — the page is navigating away
+      if (!isRedirecting) setGoogleLoading(false);
     }
   };
 

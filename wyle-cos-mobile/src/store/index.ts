@@ -42,6 +42,16 @@ interface AppState {
   googleEmail: string;
   setGoogleConnected: (connected: boolean) => void;
   setGoogleEmail: (email: string) => void;
+  googleAccounts: string[];
+  addGoogleAccount: (email: string) => void;
+  removeGoogleAccount: (email: string) => void;
+  setGoogleAccounts: (accounts: string[]) => void;
+
+  // Microsoft Outlook
+  outlookAccounts: string[];
+  addOutlookAccount: (email: string) => void;
+  removeOutlookAccount: (email: string) => void;
+  setOutlookAccounts: (accounts: string[]) => void;
 
   // Insights
   insights: InsightsData | null;
@@ -66,6 +76,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   lastBriefKey: null,
   googleConnected: false,
   googleEmail: '',
+  // Auto-load from localStorage so store survives page reloads / OAuth redirects
+  googleAccounts: (() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return JSON.parse(localStorage.getItem('wyle_google_accounts') ?? '[]');
+      }
+    } catch {}
+    return [];
+  })(),
+  outlookAccounts: (() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return JSON.parse(localStorage.getItem('wyle_outlook_accounts') ?? '[]');
+      }
+    } catch {}
+    return [];
+  })(),
   isLoading: false,
 
   setAuth: async (token, user) => {
@@ -115,4 +142,35 @@ export const useAppStore = create<AppState>((set, get) => ({
   setGoogleConnected: (googleConnected) => set({ googleConnected }),
   setGoogleEmail: (googleEmail) => set({ googleEmail }),
   setLoading: (isLoading) => set({ isLoading }),
+
+  addGoogleAccount: (email) => set(state => ({
+    googleAccounts: [...new Set([...state.googleAccounts, email])],
+    googleConnected: true,
+    googleEmail: state.googleEmail || email,  // set primary if not set
+  })),
+
+  removeGoogleAccount: (email) => set(state => {
+    const updated = state.googleAccounts.filter(e => e !== email);
+    return {
+      googleAccounts: updated,
+      googleConnected: updated.length > 0,
+      googleEmail: updated[0] ?? '',
+    };
+  }),
+
+  setGoogleAccounts: (googleAccounts) => set(state => ({
+    googleAccounts,
+    googleConnected: googleAccounts.length > 0,
+    googleEmail: googleAccounts[0] ?? state.googleEmail,
+  })),
+
+  addOutlookAccount: (email) => set(state => ({
+    outlookAccounts: [...new Set([...state.outlookAccounts, email])],
+  })),
+
+  removeOutlookAccount: (email) => set(state => ({
+    outlookAccounts: state.outlookAccounts.filter(e => e !== email),
+  })),
+
+  setOutlookAccounts: (outlookAccounts) => set({ outlookAccounts }),
 }));

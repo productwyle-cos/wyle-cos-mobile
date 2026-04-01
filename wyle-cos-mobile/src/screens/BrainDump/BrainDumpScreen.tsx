@@ -114,6 +114,12 @@ CRITICAL RULES:
 1. daysUntil must be calculated from ${todayISO}. Do NOT use any other reference date.
 2. "coming Saturday" or "this Saturday" = look up Saturday in the UPCOMING DATES table above.
 3. Always include scheduledTime when a time of day is mentioned (even with relative dates like "Saturday at 9:30 AM").
+4. IMPORTANT — Booking/Action requests ARE tasks: When the user says "book", "schedule", "arrange", "set up", "make an appointment", "get me an appointment", "can you book", "buddy book", "please book" — these are TO-DO ITEMS to extract, not commands for you to execute. You cannot actually book anything; you record the task so the user remembers to do it.
+   Examples:
+   - "book a hospital appointment at 6 PM today" → task {title: "Hospital Appointment", type: "appointment", daysUntil: 0, scheduledTime: "${todayISO}T18:00:00"}
+   - "can you book a restaurant for Saturday evening" → task {title: "Book Restaurant", type: "task", daysUntil: X (Saturday)}
+   - "hey buddy schedule a car service next week" → task {title: "Car Service", type: "task", daysUntil: 7}
+5. NEVER return an empty items array for a booking, scheduling, or action request. Always extract it as a task.
 
 Example — if today is 2026-03-19 (Thursday) and user says "hospital appointment coming Saturday at 9:30 AM":
 Saturday = 2026-03-21, daysUntil = 2, scheduledTime = "2026-03-21T09:30:00"
@@ -144,11 +150,19 @@ INTENT: "tasks" — user is creating/adding tasks, obligations, reminders
 INTENT: "calendar_query" — user is ASKING about their schedule, meetings, or events
   Triggered by phrases like:
   - "what meetings do I have next week / tomorrow / on Saturday"
-  - "tell me my schedule for..."
+  - "tell me my schedule for..." / "what is my schedule" / "meeting schedule"
   - "do I have anything on Monday"
   - "show me meetings on March 21st"
-  - "what's on my calendar"
-  - "list my meetings"
+  - "what's on my calendar" / "what's on my schedule"
+  - "list my meetings" / "show my meetings"
+  - "what are my meetings" / "any meetings today"
+  - "buddy can you tell me what are the meeting schedule" → calendar_query for today
+  - "what are all the meetings" / "what meetings are there" / "meetings scheduled for me"
+  - "meetings others scheduled for me" / "meetings booked for me" / "what's on my agenda"
+  - "what do I have today" / "what's on today" / "am I free on..."
+  - "how does my day look" / "how is my schedule looking"
+  KEY RULE: Any phrase asking about existing calendar events = calendar_query. Do NOT mix this with booking/scheduling new tasks.
+  If the period is unclear or not mentioned, default to today's date range.
   Return: {"intent": "calendar_query", "start": "<ISO datetime>", "end": "<ISO datetime>", "label": "<human period>"}
   Where:
   - start = beginning of queried period (start of day: T00:00:00)
@@ -219,7 +233,7 @@ function ObligationPreview({
   item: ParsedObligation;
   conflictEvents?: CalendarEvent[];
   overload?: OverloadInfo | null;
-  onCancelConflict?: (eventId: string, title: string) => void;
+  onCancelConflict?: (eventId: string, title: string, accountEmail?: string) => void;
 }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(16)).current;
@@ -306,7 +320,7 @@ function ObligationPreview({
             <TouchableOpacity
               key={ev.id}
               style={op.cancelReplaceBtn}
-              onPress={() => onCancelConflict(ev.id, ev.title)}
+              onPress={() => onCancelConflict(ev.id, ev.title, ev.accountEmail)}
               activeOpacity={0.8}
             >
               <Text style={op.cancelReplaceBtnText}>
@@ -420,12 +434,13 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
   const [calendarQueryLabel, setCalendarQueryLabel] = useState('');
   const [savedCount, setSavedCount]         = useState(0);
   const [tipIndex, setTipIndex]             = useState(0);
+  const [apiError, setApiError]             = useState<'credits' | 'generic' | null>(null);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim  = useRef(new Animated.Value(0)).current;
 
   // ── Cancel a conflicting calendar event ────────────────────────────────────
-  const handleCancelConflict = async (eventId: string, title: string) => {
+  const handleCancelConflict = async (eventId: string, title: string, accountEmail?: string) => {
     Alert.alert(
       'Cancel Meeting?',
       `Cancel "${title}" and notify all attendees?`,
@@ -435,7 +450,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
           text: 'Yes, Cancel & Notify',
           style: 'destructive',
           onPress: async () => {
-            const result = await cancelCalendarEvent(eventId);
+            const result = await cancelCalendarEvent(eventId, undefined, accountEmail);
             if (result.ok) {
               Alert.alert('Done', `"${title}" has been cancelled. Attendees will be notified by Google.`);
               // Remove from conflicts map so the banner disappears
@@ -517,10 +532,75 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
     }
   };
 
+  // ── Client-side calendar query detector (safety net before Claude) ──────────
+  // Catches phrases like "what meetings do I have today", "show my schedule", etc.
+  // Returns a date range if detected, null otherwise.
+  const detectCalendarQueryLocally = (text: string): { start: Date; end: Date; label: string } | null => {
+    const t = text.toLowerCase();
+    const isMeetingQuery =
+      /(meeting|meetings|scheduled|schedule|calendar|agenda|events?|appointments?)/.test(t) &&
+      /(what|when|show|tell|list|any|all|do i have|have i got|can you tell|how does|what.s on|what is on|what are)/.test(t);
+    if (!isMeetingQuery) return null;
+
+    const now = new Date();
+    // Resolve time period from transcript
+    if (/\btoday\b/.test(t) || !/(tomorrow|next week|this week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)/.test(t)) {
+      // Default: today
+      const start = new Date(now); start.setHours(0, 0, 0, 0);
+      const end   = new Date(now); end.setHours(23, 59, 59, 999);
+      return { start, end, label: 'Today' };
+    }
+    if (/\btomorrow\b/.test(t)) {
+      const start = new Date(now); start.setDate(now.getDate() + 1); start.setHours(0, 0, 0, 0);
+      const end   = new Date(start); end.setHours(23, 59, 59, 999);
+      return { start, end, label: 'Tomorrow' };
+    }
+    if (/\bthis week\b|\bnext week\b/.test(t)) {
+      const start = new Date(now); start.setHours(0, 0, 0, 0);
+      const end   = new Date(now); end.setDate(now.getDate() + 7); end.setHours(23, 59, 59, 999);
+      return { start, end, label: 'Next 7 days' };
+    }
+    // Named day of week
+    const DAYS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+    for (let d = 0; d < 7; d++) {
+      if (t.includes(DAYS[d])) {
+        const target = new Date(now);
+        const diff = (d - now.getDay() + 7) % 7 || 7; // next occurrence
+        target.setDate(now.getDate() + diff);
+        const start = new Date(target); start.setHours(0, 0, 0, 0);
+        const end   = new Date(target); end.setHours(23, 59, 59, 999);
+        const label = target.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+        return { start, end, label };
+      }
+    }
+    // Default to today if nothing resolved
+    const start = new Date(now); start.setHours(0, 0, 0, 0);
+    const end   = new Date(now); end.setHours(23, 59, 59, 999);
+    return { start, end, label: 'Today' };
+  };
+
   // ── Step 2: Send transcript to Claude ──────────────────────────────────────
   const parseWithClaude = async (text: string) => {
     if (!text.trim()) { setVoiceState('error'); return; }
     setVoiceState('parsing');
+
+    // ── Safety net: detect calendar queries client-side first ─────────────────
+    const localCalQuery = detectCalendarQueryLocally(text);
+    if (localCalQuery) {
+      setVoiceMode('calendar_query');
+      setCalendarQueryLabel(localCalQuery.label);
+      const result = await fetchEventsForDateRange(localCalQuery.start, localCalQuery.end);
+      setCalendarEvents(result.events);
+      setVoiceState('done');
+      const n = result.events.length;
+      Speech.speak(
+        n > 0
+          ? `You have ${n} ${n === 1 ? 'meeting' : 'meetings'} for ${localCalQuery.label}.`
+          : `No meetings found for ${localCalQuery.label}.`,
+        { language: 'en-US', rate: 0.95 },
+      );
+      return;
+    }
 
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -540,7 +620,13 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || 'API error');
+      if (!res.ok) {
+        const msg: string = data.error?.message ?? '';
+        if (res.status === 402 || msg.toLowerCase().includes('credit') || msg.toLowerCase().includes('balance')) {
+          throw new Error('API_CREDITS_LOW');
+        }
+        throw new Error(msg || `API error ${res.status}`);
+      }
 
       const raw   = data.content?.[0]?.text ?? '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
@@ -574,6 +660,27 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       setVoiceMode('task_creation');
       const items: ParsedObligation[] = response.items;
       if (!Array.isArray(items)) throw new Error('Invalid response');
+
+      // ── Post-Claude safety net: if Claude returned 0 items but the transcript
+      //    looks like a calendar query, route it correctly ─────────────────────
+      if (items.length === 0) {
+        const fallback = detectCalendarQueryLocally(text);
+        if (fallback) {
+          setVoiceMode('calendar_query');
+          setCalendarQueryLabel(fallback.label);
+          const result = await fetchEventsForDateRange(fallback.start, fallback.end);
+          setCalendarEvents(result.events);
+          setVoiceState('done');
+          const n = result.events.length;
+          Speech.speak(
+            n > 0
+              ? `You have ${n} ${n === 1 ? 'meeting' : 'meetings'} for ${fallback.label}.`
+              : `No meetings found for ${fallback.label}.`,
+            { language: 'en-US', rate: 0.95 },
+          );
+          return;
+        }
+      }
 
       // Give each a unique _id using timestamp
       const stamped = items.map((item, i) => ({
@@ -626,8 +733,13 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
         Speech.speak(msg, { language: 'en-US', rate: 0.95 });
       }
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Brain dump parse error:', err);
+      if (err?.message === 'API_CREDITS_LOW') {
+        setApiError('credits');
+      } else {
+        setApiError('generic');
+      }
       setVoiceState('error');
     }
   };
@@ -656,6 +768,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
     setVoiceState('idle');
     setVoiceMode('task_creation');
     setSavedCount(0);
+    setApiError(null);
   };
 
   // ── Status label ────────────────────────────────────────────────────────────
@@ -668,7 +781,7 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
       case 'done':          return voiceMode === 'calendar_query'
         ? `Found ${calendarEvents.length} ${calendarEvents.length === 1 ? 'meeting' : 'meetings'} — see below`
         : `Found ${parsed.length} ${parsed.length === 1 ? 'task' : 'tasks'} — review below`;
-      case 'error':         return 'Could not process. Try again.';
+      case 'error':         return apiError === 'credits' ? 'AI credits exhausted — top up to continue' : 'Could not process. Try again.';
     }
   };
 
@@ -781,6 +894,79 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
           </View>
         )}
 
+        {/* ── Empty state: 0 tasks found ─────────────────────────────────── */}
+        {voiceMode === 'task_creation' && voiceState === 'done' && parsed.length === 0 && (() => {
+          const t = transcript.trim().toLowerCase();
+          // detect question / calendar query phrasing
+          const isQuestion = /^(hey\s+)?(what|who|where|when|how|can you|tell me|show me|is there|do i|are there|could you|would you|buddy)/i.test(transcript.trim());
+          const isMeetingQuery = /(meeting|meetings|schedule|calendar|agenda|events?|booked for me|scheduled for me)/i.test(t) && /(what|when|do i have|show|tell|list|any|all)/i.test(t);
+          return (
+            <View style={s.emptyDumpBlock}>
+              {isMeetingQuery ? (
+                /* Looks like a calendar/meeting query — run it as calendar query */
+                <>
+                  <Text style={s.emptyDumpIcon}>📅</Text>
+                  <Text style={s.emptyDumpTitle}>Looking for meetings?</Text>
+                  <Text style={s.emptyDumpSub}>
+                    Try asking about your calendar directly:{'\n'}
+                    "What meetings do I have today?" or{'\n'}
+                    "Show me my schedule for this week"
+                  </Text>
+                  <TouchableOpacity style={s.emptyDumpBuddyBtn} onPress={handleDiscard} activeOpacity={0.85}>
+                    <Text style={s.emptyDumpBuddyText}>Try again  →</Text>
+                  </TouchableOpacity>
+                </>
+              ) : isQuestion ? (
+                /* Looks like a general question — redirect to Buddy */
+                <>
+                  <Text style={s.emptyDumpIcon}>💬</Text>
+                  <Text style={s.emptyDumpTitle}>That sounds like a question</Text>
+                  <Text style={s.emptyDumpSub}>
+                    Voice Brain Dump creates tasks from what you say.{'\n'}
+                    For questions like schedules or news, ask Buddy instead.
+                  </Text>
+                  <TouchableOpacity
+                    style={s.emptyDumpBuddyBtn}
+                    onPress={() => nav.navigate('buddy')}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={s.emptyDumpBuddyText}>Ask Buddy instead  →</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
+                    <Text style={s.discardBtnText}>Try a task instead</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                /* Genuinely no tasks found — show examples */
+                <>
+                  <Text style={s.emptyDumpIcon}>🤔</Text>
+                  <Text style={s.emptyDumpTitle}>No tasks found</Text>
+                  <Text style={s.emptyDumpSub}>
+                    Buddy couldn't find any obligations in what you said.{'\n'}
+                    Try speaking like these examples:
+                  </Text>
+                  <View style={s.emptyExamples}>
+                    {[
+                      '"Pay school fee of AED 14,000 by end of month"',
+                      '"Renew Emirates ID, expires in 5 days"',
+                      '"Book hospital appointment at 6 PM today"',
+                      '"Car registration due next Saturday, AED 450"',
+                    ].map((ex, i) => (
+                      <View key={i} style={s.emptyExampleRow}>
+                        <View style={s.emptyExampleDot} />
+                        <Text style={s.emptyExampleText}>{ex}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <TouchableOpacity style={s.discardBtn} onPress={handleDiscard}>
+                    <Text style={s.discardBtnText}>Try again</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          );
+        })()}
+
         {/* Calendar query results */}
         {voiceMode === 'calendar_query' && voiceState === 'done' && (
           <View style={s.resultsBlock}>
@@ -811,6 +997,19 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
             <TouchableOpacity onPress={() => nav.navigate('obligations')} style={s.viewBtn}>
               <Text style={s.viewBtnText}>View in Obligations →</Text>
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── API Credits error banner ──────────────────────────────────── */}
+        {apiError === 'credits' && (
+          <View style={s.creditsErrorBlock}>
+            <Text style={s.creditsErrorIcon}>⚠️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.creditsErrorTitle}>AI credits exhausted</Text>
+              <Text style={s.creditsErrorSub}>
+                Top up your Anthropic API credits at console.anthropic.com → Plans &amp; Billing to restore Buddy and Voice Brain Dump.
+              </Text>
+            </View>
           </View>
         )}
 
@@ -908,6 +1107,29 @@ const s = StyleSheet.create({
   noEventsBlock: { backgroundColor: C.surface, borderRadius: 14, padding: 24, alignItems: 'center', borderWidth: 1, borderColor: C.border, marginBottom: 10, gap: 8 },
   noEventsEmoji: { fontSize: 32 },
   noEventsText:  { color: C.textSec, fontSize: 14, textAlign: 'center' },
+
+  // ── 0-tasks empty state
+  emptyDumpBlock: {
+    backgroundColor: C.surface, borderRadius: 18, padding: 22,
+    borderWidth: 1, borderColor: C.border, marginBottom: 16, alignItems: 'center', gap: 10,
+  },
+  emptyDumpIcon:  { fontSize: 36 },
+  emptyDumpTitle: { color: C.white, fontSize: 16, fontWeight: '700', textAlign: 'center' },
+  emptyDumpSub:   { color: C.textSec, fontSize: 13, lineHeight: 20, textAlign: 'center' },
+  emptyDumpBuddyBtn: {
+    backgroundColor: C.verdigris, borderRadius: 999,
+    paddingHorizontal: 24, paddingVertical: 12, marginTop: 4,
+  },
+  emptyDumpBuddyText: { color: C.white, fontSize: 14, fontWeight: '700' },
+  emptyExamples:  { alignSelf: 'stretch', gap: 8, marginTop: 4 },
+  emptyExampleRow:{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  emptyExampleDot:{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.verdigris, marginTop: 6, flexShrink: 0 },
+  emptyExampleText:{ color: C.textSec, fontSize: 12, lineHeight: 18, fontStyle: 'italic', flex: 1 },
+
+  creditsErrorBlock: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, backgroundColor: '#3A1A00', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: '#FF8C00', marginTop: 8 },
+  creditsErrorIcon:  { fontSize: 22 },
+  creditsErrorTitle: { color: '#FF8C00', fontSize: 14, fontWeight: '800', marginBottom: 4 },
+  creditsErrorSub:   { color: '#CC7000', fontSize: 12, lineHeight: 17 },
 
   savedBlock: { alignItems: 'center', paddingVertical: 32, gap: 12 },
   savedIcon:  { fontSize: 40, color: C.verdigris },
