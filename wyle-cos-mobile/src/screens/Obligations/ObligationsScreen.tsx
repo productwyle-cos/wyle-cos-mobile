@@ -16,7 +16,9 @@ import { useAppStore } from '../../store';
 import { VoiceService } from '../../services/voiceService';
 import { UIObligation } from '../../types';
 import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fmtDate, detectDayOverload, OVERLOAD_THRESHOLD, cancelCalendarEvent, sendGmailEmail } from '../../services/calendarService';
-import { getAccessToken, getAccessTokenForEmail } from '../../services/googleAuthService';
+import { getAccessToken, getAccessTokenForEmail, getAllGoogleAccounts } from '../../services/googleAuthService';
+import { sendOutlookEmail } from '../../services/outlookCalendarService';
+import { getAllOutlookAccounts } from '../../services/outlookAuthService';
 
 const { width } = Dimensions.get('window');
 
@@ -215,9 +217,10 @@ function TabBar({ active, onTab }: { active: string; onTab: (s: any) => void }) 
 // ─────────────────────────────────────────────────────────────────────────────
 // Obligation Card
 // ─────────────────────────────────────────────────────────────────────────────
-function ObligationCard({ item, onPress, onResolve }: any) {
-  const riskColor = RISK_COLORS[item.risk as Risk];
-  const scaleAnim = useRef(new Animated.Value(1)).current;
+function ObligationCard({ item, onPress, onResolve, onReply }: any) {
+  const riskColor   = RISK_COLORS[item.risk as Risk];
+  const isReplyType = item.type === 'reply_needed';
+  const scaleAnim   = useRef(new Animated.Value(1)).current;
   const handlePress = () => {
     Animated.sequence([
       Animated.timing(scaleAnim, { toValue: 0.97, duration: 80, useNativeDriver: true }),
@@ -245,6 +248,15 @@ function ObligationCard({ item, onPress, onResolve }: any) {
             {item.amount && <Text style={styles.amount}>AED {item.amount.toLocaleString()}</Text>}
           </View>
         </View>
+        {/* Reply button for reply_needed obligations */}
+        {isReplyType && !!onReply && (
+          <TouchableOpacity
+            style={[styles.resolveBtn, { backgroundColor: `${C.verdigris}18`, marginRight: 6 }]}
+            onPress={() => onReply(item)}
+          >
+            <Text style={{ fontSize: 14 }}>✉️</Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity style={styles.resolveBtn} onPress={() => onResolve(item)}>
           <Text style={styles.resolveBtnText}>✓</Text>
         </TouchableOpacity>
@@ -256,9 +268,10 @@ function ObligationCard({ item, onPress, onResolve }: any) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Detail Modal
 // ─────────────────────────────────────────────────────────────────────────────
-function DetailModal({ item, visible, onClose, onResolve }: any) {
+function DetailModal({ item, visible, onClose, onResolve, onReply }: any) {
   if (!item) return null;
-  const riskColor = RISK_COLORS[item.risk as Risk];
+  const riskColor   = RISK_COLORS[item.risk as Risk];
+  const isReplyType = item.type === 'reply_needed';
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={modal.overlay}>
@@ -289,6 +302,12 @@ function DetailModal({ item, visible, onClose, onResolve }: any) {
                 <Text style={modal.infoValue}>AED {item.amount.toLocaleString()}</Text>
               </View>
             )}
+            {isReplyType && item.replyTo && (
+              <View style={modal.infoItem}>
+                <Text style={modal.infoLabel}>Reply to</Text>
+                <Text style={[modal.infoValue, { fontSize: 11 }]} numberOfLines={1}>{item.replyTo}</Text>
+              </View>
+            )}
           </View>
           {item.executionPath && (
             <View style={modal.executionBlock}>
@@ -297,6 +316,21 @@ function DetailModal({ item, visible, onClose, onResolve }: any) {
             </View>
           )}
           <View style={modal.actions}>
+            {/* Reply button — only for reply_needed type */}
+            {isReplyType && !!onReply && (
+              <TouchableOpacity
+                style={[modal.primaryBtn, { marginBottom: 10 }]}
+                onPress={() => { onClose(); onReply(item); }}
+              >
+                <LinearGradient
+                  colors={['#0078D4', C.verdigris]}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                  style={modal.primaryBtnGrad}
+                >
+                  <Text style={modal.primaryBtnText}>✉️  Compose Reply</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={modal.primaryBtn}
               onPress={() => { onResolve(item); onClose(); }}
@@ -1047,6 +1081,206 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Email Reply Modal
+// Shown when user taps ✉️ on a reply_needed obligation.
+// Drafts a reply to the sender; sends via Gmail or Outlook depending on
+// which accounts are connected.
+// ─────────────────────────────────────────────────────────────────────────────
+function EmailReplyModal({
+  visible,
+  obligation,
+  onClose,
+  onSent,
+}: {
+  visible: boolean;
+  obligation: UIObligation | null;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const [toAddress,   setToAddress]   = useState('');
+  const [subject,     setSubject]     = useState('');
+  const [body,        setBody]        = useState('');
+  const [sending,     setSending]     = useState(false);
+  const [provider,    setProvider]    = useState<'gmail' | 'outlook'>('gmail');
+  const [fromAccount, setFromAccount] = useState('');
+
+  // Pre-fill fields whenever a new obligation is loaded
+  useEffect(() => {
+    if (!obligation || !visible) return;
+    const ob = obligation as any;
+    setToAddress(ob.replyTo ?? '');
+    setSubject(ob.replySubject ?? (ob.title ? `Re: ${ob.title}` : ''));
+    setBody('');
+
+    // Determine provider from notes field (e.g. "source: email from outlook@...")
+    const notes = (ob.notes ?? '').toLowerCase();
+    if (notes.includes('outlook')) {
+      setProvider('outlook');
+      const accs = getAllOutlookAccounts();
+      setFromAccount(accs[0] ?? '');
+    } else {
+      setProvider('gmail');
+      getAllGoogleAccounts().then(accs => setFromAccount(accs[0] ?? ''));
+    }
+  }, [obligation, visible]);
+
+  const handleSend = async () => {
+    if (!toAddress.trim() || !subject.trim() || !body.trim()) {
+      Alert.alert('Missing fields', 'Please fill in To, Subject, and Message before sending.');
+      return;
+    }
+    setSending(true);
+    try {
+      if (provider === 'outlook' && fromAccount) {
+        const ok = await sendOutlookEmail(fromAccount, toAddress.trim(), subject.trim(), body.trim());
+        if (!ok) throw new Error('Outlook send failed — check your connection.');
+      } else {
+        // Gmail
+        const token = fromAccount
+          ? await getAccessTokenForEmail(fromAccount)
+          : await getAccessToken();
+        if (!token) throw new Error('No Gmail token. Please reconnect your Google account.');
+        await sendGmailEmail(toAddress.trim(), subject.trim(), body.trim(), token);
+      }
+      Alert.alert('✅ Reply Sent', `Your reply has been sent to ${toAddress.trim()}.`);
+      onSent();
+      onClose();
+    } catch (e: any) {
+      Alert.alert('Send failed', e?.message ?? 'Could not send email. Please try again.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (!obligation) return null;
+
+  const ob = obligation as any;
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <View style={reply.overlay}>
+          <TouchableOpacity style={reply.backdrop} onPress={onClose} />
+          <View style={reply.sheet}>
+            <View style={reply.handle} />
+
+            {/* Header */}
+            <View style={reply.headerRow}>
+              <View>
+                <Text style={reply.title}>Reply to Email</Text>
+                <Text style={reply.sub} numberOfLines={1}>{ob.title}</Text>
+              </View>
+              <TouchableOpacity onPress={onClose}>
+                <Text style={reply.closeBtn}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Provider badge */}
+            <View style={reply.providerRow}>
+              <View style={[reply.providerBadge, { backgroundColor: provider === 'gmail' ? '#EA433520' : '#0078D420' }]}>
+                <Text style={[reply.providerText, { color: provider === 'gmail' ? '#EA4335' : '#0078D4' }]}>
+                  {provider === 'gmail' ? '📧 Gmail' : '📨 Outlook'} · {fromAccount || 'No account connected'}
+                </Text>
+              </View>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* To */}
+              <Text style={reply.label}>To</Text>
+              <TextInput
+                style={reply.input}
+                value={toAddress}
+                onChangeText={setToAddress}
+                placeholder="recipient@email.com"
+                placeholderTextColor={C.textTer}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+
+              {/* Subject */}
+              <Text style={reply.label}>Subject</Text>
+              <TextInput
+                style={reply.input}
+                value={subject}
+                onChangeText={setSubject}
+                placeholder="Re: ..."
+                placeholderTextColor={C.textTer}
+              />
+
+              {/* Message */}
+              <Text style={reply.label}>Message</Text>
+              <TextInput
+                style={[reply.input, reply.bodyInput]}
+                value={body}
+                onChangeText={setBody}
+                placeholder="Type your reply here…"
+                placeholderTextColor={C.textTer}
+                multiline
+                textAlignVertical="top"
+              />
+
+              {/* Context note */}
+              {!!ob.executionPath && (
+                <View style={reply.contextBox}>
+                  <Text style={reply.contextLabel}>BUDDY SUGGESTS</Text>
+                  <Text style={reply.contextText}>{ob.executionPath}</Text>
+                </View>
+              )}
+
+              {/* Send button */}
+              <TouchableOpacity
+                style={[reply.sendBtn, (sending || !body.trim()) && { opacity: 0.5 }]}
+                onPress={handleSend}
+                disabled={sending || !body.trim()}
+              >
+                {sending
+                  ? <ActivityIndicator color={C.bg} size="small" />
+                  : <Text style={reply.sendBtnText}>Send Reply</Text>
+                }
+              </TouchableOpacity>
+
+              <TouchableOpacity style={reply.cancelBtn} onPress={onClose}>
+                <Text style={reply.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <View style={{ height: 24 }} />
+            </ScrollView>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+// ── EmailReplyModal styles ─────────────────────────────────────────────────────
+const reply = StyleSheet.create({
+  overlay:       { flex: 1, justifyContent: 'flex-end' },
+  backdrop:      { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
+  sheet:         { backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 12, maxHeight: '90%' },
+  handle:        { width: 36, height: 4, backgroundColor: C.textTer, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
+  headerRow:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+  title:         { color: C.white, fontSize: 18, fontWeight: '700' },
+  sub:           { color: C.textSec, fontSize: 12, marginTop: 2, maxWidth: 240 },
+  closeBtn:      { color: C.textSec, fontSize: 20, paddingLeft: 8 },
+  providerRow:   { marginBottom: 14 },
+  providerBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  providerText:  { fontSize: 12, fontWeight: '600' },
+  label:         { color: C.textSec, fontSize: 11, fontWeight: '600', letterSpacing: 0.5, marginBottom: 6, marginTop: 2 },
+  input:         { backgroundColor: C.surfaceEl, color: C.white, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, borderWidth: 1, borderColor: C.border, marginBottom: 12 },
+  bodyInput:     { height: 130 },
+  contextBox:    { backgroundColor: `${C.verdigris}12`, borderRadius: 10, padding: 12, marginBottom: 14, borderWidth: 1, borderColor: `${C.verdigris}28` },
+  contextLabel:  { color: C.verdigris, fontSize: 10, fontWeight: '700', letterSpacing: 0.6, marginBottom: 4 },
+  contextText:   { color: C.textSec, fontSize: 13, lineHeight: 18 },
+  sendBtn:       { backgroundColor: C.verdigris, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginBottom: 10 },
+  sendBtnText:   { color: C.bg, fontSize: 15, fontWeight: '700' },
+  cancelBtn:     { alignItems: 'center', paddingVertical: 10 },
+  cancelBtnText: { color: C.textSec, fontSize: 14 },
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main Screen
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ObligationsScreen({ navigation }: { navigation: NavProp }) {
@@ -1062,6 +1296,9 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
   const [detailVisible, setDetail] = useState(false);
   const [addVisible, setAdd]       = useState(false);
   const [dumpVisible, setDump]     = useState(false);
+  // Reply modal state
+  const [replyVisible,     setReplyVisible]     = useState(false);
+  const [replyObligation,  setReplyObligation]  = useState<UIObligation | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideUp  = useRef(new Animated.Value(16)).current;
 
@@ -1215,6 +1452,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
               item={item}
               onPress={(it: any) => { setSelected(it); setDetail(true); }}
               onResolve={(it: any) => resolveObligation(it._id)}
+              onReply={(it: UIObligation) => { setReplyObligation(it); setReplyVisible(true); }}
             />
           </Animated.View>
         ))}
@@ -1363,6 +1601,7 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
         item={selected} visible={detailVisible}
         onClose={() => setDetail(false)}
         onResolve={(it: any) => resolveObligation(it._id)}
+        onReply={(it: UIObligation) => { setReplyObligation(it); setReplyVisible(true); }}
       />
       <AddModal
         visible={addVisible} onClose={() => setAdd(false)}
@@ -1374,6 +1613,17 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
         existingObligations={active}
         onResolve={(id) => resolveObligation(id)}
         onOpenCancelNote={openCancelNoteModal}
+      />
+
+      {/* Email Reply Modal — shown when user taps ✉️ on a reply_needed obligation */}
+      <EmailReplyModal
+        visible={replyVisible}
+        obligation={replyObligation}
+        onClose={() => setReplyVisible(false)}
+        onSent={() => {
+          // Mark the obligation as resolved after sending reply
+          if (replyObligation) resolveObligation(replyObligation._id);
+        }}
       />
 
       {/* Cancellation Note Modal — top-level, not nested inside BrainDumpModal */}

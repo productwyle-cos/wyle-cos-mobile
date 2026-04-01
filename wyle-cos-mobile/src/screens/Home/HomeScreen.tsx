@@ -18,7 +18,8 @@ import { UIObligation } from '../../types';
 import { generateBrief, getBriefKey, getBriefTimeOfDay, isBriefStale } from '../../services/briefService';
 import { saveMorningSnapshot, getDayProgress } from '../../services/snapshotService';
 import { signInWithGoogle, isGoogleConnected, handleGoogleOAuthCallback } from '../../services/googleAuthService';
-import { runFullSignalScan } from '../../services/signalService';
+import { handleOutlookOAuthCallback, isOutlookConnected } from '../../services/outlookAuthService';
+import { runMultiAccountSignalScan } from '../../services/signalService';
 
 const { width } = Dimensions.get('window');
 
@@ -331,12 +332,15 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
   const setGoogleConnected = useAppStore(st => st.setGoogleConnected);
   const setGoogleEmail     = useAppStore(st => st.setGoogleEmail);
 
-  const [userName,        setUserName]        = useState('');
-  const [timeStr,         setTimeStr]         = useState(getTimeString());
-  const [greeting,        setGreeting]        = useState(getGreeting());
-  const [briefLoading,    setBriefLoading]    = useState(false);
+  const [userName,         setUserName]         = useState('');
+  const [timeStr,          setTimeStr]          = useState(getTimeString());
+  const [greeting,         setGreeting]         = useState(getGreeting());
+  const [briefLoading,     setBriefLoading]     = useState(false);
   const [googleConnecting, setGoogleConnecting] = useState(false);
-  const [scanSummary,     setScanSummary]     = useState<string | null>(null);
+  const [scanSummary,      setScanSummary]      = useState<string | null>(null);
+  const [scanning,         setScanning]         = useState(false);
+  const [outlookConnected, setOutlookConnected] = useState(false);
+  const sessionScannedRef = useRef(false); // prevent double-scan on re-renders
 
   const fadeIn        = useRef(new Animated.Value(0)).current;
   const slideUp       = useRef(new Animated.Value(20)).current;
@@ -371,16 +375,42 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       }
     });
 
+    // ── Check Outlook connection state ────────────────────────────────────────
+    const { connected: olConnected } = isOutlookConnected();
+    if (olConnected) setOutlookConnected(true);
+
+    // ── Web: handle Outlook OAuth callback (takes priority if provider=microsoft) ──
+    handleOutlookOAuthCallback().then(async olResult => {
+      if (olResult && olResult.success === true) {
+        setOutlookConnected(true);
+        // Scan the newly connected Outlook account immediately
+        try {
+          const scan = await runMultiAccountSignalScan(
+            useAppStore.getState().obligations.filter(o => o.status !== 'completed'),
+          );
+          if (scan.obligations.length > 0) {
+            useAppStore.getState().addObligations(scan.obligations);
+          }
+          setScanSummary(scan.summary);
+          Alert.alert('Outlook Connected ✓', `Signed in as ${olResult.email}.\n\n${scan.summary}`);
+          sessionScannedRef.current = true;
+        } catch {
+          Alert.alert('Outlook Connected ✓', `Signed in as ${olResult.email}.\nInbox scan will run in the background.`);
+        }
+      } else if (olResult && olResult.success === false) {
+        Alert.alert('Outlook sign-in failed', olResult.error);
+      }
+    });
+
     // ── Web: complete OAuth redirect callback (if returning from Google) ──────
     // Must run BEFORE isGoogleConnected so the new token is in storage first.
     handleGoogleOAuthCallback().then(async callbackResult => {
       if (callbackResult && callbackResult.success === true) {
         setGoogleConnected(true);
         setGoogleEmail(callbackResult.email);
-        // Background inbox/calendar scan
+        // Scan all accounts after new Google account connected
         try {
-          const scan = await runFullSignalScan(
-            callbackResult.accessToken,
+          const scan = await runMultiAccountSignalScan(
             useAppStore.getState().obligations.filter(o => o.status !== 'completed'),
           );
           if (scan.obligations.length > 0) {
@@ -388,6 +418,7 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
           }
           setScanSummary(scan.summary);
           Alert.alert('Connected ✓', `Signed in as ${callbackResult.email}.\n\n${scan.summary}`);
+          sessionScannedRef.current = true;
         } catch {
           Alert.alert('Connected ✓', `Signed in as ${callbackResult.email}.\nCalendar & Gmail synced.`);
         }
@@ -396,8 +427,30 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       }
 
       // Always re-check stored token after potential callback
-      isGoogleConnected().then(({ connected, email }) => {
-        if (connected) { setGoogleConnected(true); setGoogleEmail(email); }
+      isGoogleConnected().then(async ({ connected, email }) => {
+        if (connected) {
+          setGoogleConnected(true);
+          setGoogleEmail(email);
+
+          // ── Auto-scan on app open (once per session, silent) ────────────────
+          if (!sessionScannedRef.current) {
+            sessionScannedRef.current = true;
+            try {
+              setScanning(true);
+              const scan = await runMultiAccountSignalScan(
+                useAppStore.getState().obligations.filter(o => o.status !== 'completed'),
+              );
+              if (scan.obligations.length > 0) {
+                useAppStore.getState().addObligations(scan.obligations);
+              }
+              setScanSummary(scan.summary);
+            } catch {
+              // Silent fail — don't interrupt UX
+            } finally {
+              setScanning(false);
+            }
+          }
+        }
       });
     });
 
@@ -473,14 +526,14 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       setGoogleConnected(true);
       setGoogleEmail(result.email);
 
-      // Background: parse Gmail + Calendar → add obligations to store
+      // Background: parse Gmail + Calendar + all connected accounts → add obligations
       try {
-        const scan = await runFullSignalScan(
-          result.accessToken,
+        const scan = await runMultiAccountSignalScan(
           obligations.filter(o => o.status !== 'completed'),
         );
         if (scan.obligations.length > 0) addObligations(scan.obligations);
         setScanSummary(scan.summary);
+        sessionScannedRef.current = true;
         Alert.alert('Connected ✓', `Signed in as ${result.email}.\n\n${scan.summary}`);
       } catch {
         Alert.alert('Connected ✓', `Signed in as ${result.email}.\nInbox scan will run in the background.`);
@@ -489,6 +542,27 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
       Alert.alert('Error', err?.message ?? 'Something went wrong. Please try again.');
     } finally {
       setGoogleConnecting(false);
+    }
+  };
+
+  // ── Manual inbox scan ────────────────────────────────────────────────────
+  const handleManualScan = async () => {
+    if (scanning) return;
+    setScanning(true);
+    setScanSummary(null);
+    try {
+      const scan = await runMultiAccountSignalScan(
+        obligations.filter(o => o.status !== 'completed'),
+      );
+      if (scan.obligations.length > 0) addObligations(scan.obligations);
+      setScanSummary(scan.summary);
+      if (scan.obligations.length > 0) {
+        Alert.alert('Inbox Scan Complete', scan.summary);
+      }
+    } catch (e: any) {
+      Alert.alert('Scan failed', e?.message ?? 'Could not scan inbox. Please try again.');
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -698,6 +772,45 @@ export default function HomeScreen({ navigation }: { navigation: NavProp }) {
               {(['#4285F4','#EA4335','#FBBC05','#34A853'] as const).map((col, i) => (
                 <View key={i} style={[s.gStripeSegment, { backgroundColor: col }]} />
               ))}
+            </View>
+          </Animated.View>
+        )}
+
+        {/* ── Inbox Scan Banner (shown when any account is connected) ───────── */}
+        {(googleConnected || outlookConnected) && (
+          <Animated.View style={{ opacity: fadeIn, paddingHorizontal: 16, marginBottom: 12 }}>
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+              backgroundColor: C.surface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
+              borderWidth: 1, borderColor: C.border,
+            }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: C.textSec, fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
+                  {scanning ? 'SCANNING INBOX…' : 'INBOX SCAN'}
+                </Text>
+                {scanSummary ? (
+                  <Text style={{ color: C.white, fontSize: 12, marginTop: 2 }} numberOfLines={2}>
+                    {scanSummary}
+                  </Text>
+                ) : (
+                  <Text style={{ color: C.textTer, fontSize: 12, marginTop: 2 }}>
+                    Tap to scan Gmail{outlookConnected ? ' + Outlook' : ''} for action items
+                  </Text>
+                )}
+              </View>
+              <TouchableOpacity
+                onPress={handleManualScan}
+                disabled={scanning}
+                style={{
+                  backgroundColor: scanning ? C.surfaceEl : C.verdigris,
+                  borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7, marginLeft: 10,
+                }}
+              >
+                {scanning
+                  ? <ActivityIndicator color={C.textSec} size="small" />
+                  : <Text style={{ color: C.bg, fontSize: 12, fontWeight: '700' }}>Scan</Text>
+                }
+              </TouchableOpacity>
             </View>
           </Animated.View>
         )}

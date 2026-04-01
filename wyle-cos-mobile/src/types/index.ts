@@ -83,6 +83,9 @@ export interface UIObligation {
   status: 'active' | 'completed';
   executionPath: string;
   notes: string | null;
+  // Email reply fields — populated when type === 'reply_needed'
+  replyTo?: string | null;
+  replySubject?: string | null;
 }
 
 // Helper — converts backend Obligation to UIObligation when API is ready
