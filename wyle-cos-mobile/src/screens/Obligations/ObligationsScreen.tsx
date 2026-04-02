@@ -1329,6 +1329,146 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Email Writing Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Single LanguageTool match returned by the REST API */
+interface LTMatch {
+  message: string;
+  shortMessage?: string;
+  offset: number;
+  length: number;
+  replacements: { value: string }[];
+}
+
+/** Call LanguageTool public REST API — no key required, 20 req/min free */
+async function checkGrammar(text: string): Promise<LTMatch[]> {
+  if (!text.trim() || text.length < 15) return [];
+  try {
+    const res = await fetch('https://api.languagetool.org/v2/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `language=en-US&text=${encodeURIComponent(text)}`,
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.matches ?? []) as LTMatch[];
+  } catch {
+    return [];
+  }
+}
+
+/** Apply a LanguageTool replacement to the text at the match position */
+function applyLTFix(text: string, match: LTMatch, replacement: string): string {
+  return text.slice(0, match.offset) + replacement + text.slice(match.offset + match.length);
+}
+
+/** Rewrite an email body in an authoritative C-suite executive tone via Claude */
+async function improveToneWithClaude(
+  body: string,
+  context: { toAddress: string; subject: string; obligationTitle: string },
+): Promise<string> {
+  if (!ANTHROPIC_API_KEY) throw new Error('No Anthropic API key configured.');
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-5',
+      max_tokens: 1024,
+      system:
+        'You are a senior C-suite executive assistant. ' +
+        'Rewrite the following email reply to sound authoritative, polished, and professionally warm. ' +
+        'Maintain the original intent and all key details exactly. ' +
+        'Be concise — no filler phrases. Use formal but approachable language. ' +
+        'Do not add greetings or sign-offs unless already present. ' +
+        'Return ONLY the rewritten email body, nothing else.',
+      messages: [{
+        role: 'user',
+        content:
+          `To: ${context.toAddress}\nSubject: ${context.subject}\nRegarding: ${context.obligationTitle}\n\nCurrent draft:\n${body}`,
+      }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Claude API error ${res.status}`);
+  const data = await res.json();
+  return (data.content?.[0]?.text ?? body).trim();
+}
+
+/** Rule-based draft fallback — used when no Claude key or API fails */
+function autoDraftWithRules(ob: any): string {
+  const title   = ob.title   ?? 'your message';
+  const type    = ob.type    ?? '';
+  const subject = ob.replySubject ?? ob.title ?? '';
+
+  if (/proposal/i.test(subject) || /proposal/i.test(title)) {
+    return (
+      `Thank you for sharing the proposal regarding "${title}".\n\n` +
+      `I have reviewed the details and will provide comprehensive feedback shortly. ` +
+      `Please let me know if there are any immediate action items that require my attention.\n\n` +
+      `Best regards`
+    );
+  }
+  if (type === 'payment' || /invoice/i.test(subject)) {
+    return (
+      `Thank you for the invoice related to "${title}".\n\n` +
+      `I am reviewing this with our finance team and will confirm the payment schedule promptly.\n\n` +
+      `Best regards`
+    );
+  }
+  if (/follow.?up/i.test(subject) || /follow.?up/i.test(title)) {
+    return (
+      `Thank you for following up on "${title}".\n\n` +
+      `I appreciate your diligence. I will revert with a detailed response by end of business today.\n\n` +
+      `Best regards`
+    );
+  }
+  return (
+    `Thank you for your email regarding "${title}".\n\n` +
+    `I have noted the details and will follow up with the necessary information at the earliest opportunity.\n\n` +
+    `Best regards`
+  );
+}
+
+/** Auto-draft a professional first reply via Claude; falls back to rules */
+async function autoDraftReply(ob: any): Promise<string> {
+  if (!ANTHROPIC_API_KEY) return autoDraftWithRules(ob);
+  try {
+    const context =
+      `Subject: ${ob.replySubject ?? ob.title ?? 'N/A'}\n` +
+      `From: ${ob.replyTo ?? 'Unknown sender'}\n` +
+      `Context: ${ob.notes ?? ob.executionPath ?? 'No additional context'}\n` +
+      `Obligation type: ${ob.type ?? 'reply_needed'}`;
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-5',
+        max_tokens: 512,
+        system:
+          'You are a senior C-suite executive assistant drafting a professional email reply. ' +
+          'Write a concise, polished reply (3–5 sentences) in the tone of a high-level executive. ' +
+          'Be direct and professional. End with "Best regards" on a new line. ' +
+          'Return ONLY the email body — no subject, no headers.',
+        messages: [{ role: 'user', content: `Draft a reply to this email:\n${context}` }],
+      }),
+    });
+    if (!res.ok) return autoDraftWithRules(ob);
+    const data = await res.json();
+    return (data.content?.[0]?.text ?? autoDraftWithRules(ob)).trim();
+  } catch {
+    return autoDraftWithRules(ob);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Email Reply Modal
 // Shown when user taps ✉️ on a reply_needed obligation.
 // Drafts a reply to the sender; sends via Gmail or Outlook depending on
@@ -1345,20 +1485,29 @@ function EmailReplyModal({
   onClose: () => void;
   onSent: () => void;
 }) {
-  const [toAddress,   setToAddress]   = useState('');
-  const [subject,     setSubject]     = useState('');
-  const [body,        setBody]        = useState('');
-  const [sending,     setSending]     = useState(false);
-  const [provider,    setProvider]    = useState<'gmail' | 'outlook'>('gmail');
-  const [fromAccount, setFromAccount] = useState('');
+  const [toAddress,    setToAddress]    = useState('');
+  const [subject,      setSubject]      = useState('');
+  const [body,         setBody]         = useState('');
+  const [sending,      setSending]      = useState(false);
+  const [provider,     setProvider]     = useState<'gmail' | 'outlook'>('gmail');
+  const [fromAccount,  setFromAccount]  = useState('');
 
-  // Pre-fill fields whenever a new obligation is loaded
+  // AI / grammar states
+  const [drafting,     setDrafting]     = useState(false);   // auto-draft in progress
+  const [improving,    setImproving]    = useState(false);   // tone improvement in progress
+  const [ltMatches,    setLtMatches]    = useState<LTMatch[]>([]);
+  const [ltChecking,   setLtChecking]   = useState(false);
+  const [ltExpanded,   setLtExpanded]   = useState(false);
+  const ltDebounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Pre-fill fields + auto-draft whenever a new obligation is loaded
   useEffect(() => {
     if (!obligation || !visible) return;
     const ob = obligation as any;
     setToAddress(ob.replyTo ?? '');
     setSubject(ob.replySubject ?? (ob.title ? `Re: ${ob.title}` : ''));
-    setBody('');
+    setLtMatches([]);
+    setLtExpanded(false);
 
     // Determine provider from notes field (e.g. "source: email from outlook@...")
     const notes = (ob.notes ?? '').toLowerCase();
@@ -1370,7 +1519,53 @@ function EmailReplyModal({
       setProvider('gmail');
       getAllGoogleAccounts().then(accs => setFromAccount(accs[0] ?? ''));
     }
+
+    // Auto-draft a professional first reply
+    setDrafting(true);
+    setBody('');
+    autoDraftReply(ob)
+      .then(draft => setBody(draft))
+      .catch(() => setBody(autoDraftWithRules(ob)))
+      .finally(() => setDrafting(false));
   }, [obligation, visible]);
+
+  // Debounced grammar check — fires 600 ms after user stops typing
+  useEffect(() => {
+    if (ltDebounceRef.current) clearTimeout(ltDebounceRef.current);
+    if (!body.trim() || body.length < 20) { setLtMatches([]); return; }
+    ltDebounceRef.current = setTimeout(async () => {
+      setLtChecking(true);
+      const matches = await checkGrammar(body);
+      setLtMatches(matches);
+      setLtChecking(false);
+    }, 600);
+    return () => { if (ltDebounceRef.current) clearTimeout(ltDebounceRef.current); };
+  }, [body]);
+
+  const handleImproveTone = async () => {
+    if (!body.trim()) return;
+    setImproving(true);
+    try {
+      const improved = await improveToneWithClaude(body, {
+        toAddress,
+        subject,
+        obligationTitle: (obligation as any)?.title ?? '',
+      });
+      setBody(improved);
+      setLtMatches([]); // re-check grammar on new text
+    } catch (e: any) {
+      Alert.alert('Tone improvement failed', e?.message ?? 'Please try again.');
+    } finally {
+      setImproving(false);
+    }
+  };
+
+  const handleApplyFix = (match: LTMatch, replacement: string) => {
+    const fixed = applyLTFix(body, match, replacement);
+    setBody(fixed);
+    setLtMatches(prev => prev.filter(m => m !== match));
+    if (ltMatches.length <= 1) setLtExpanded(false);
+  };
 
   const handleSend = async () => {
     if (!toAddress.trim() || !subject.trim() || !body.trim()) {
@@ -1383,7 +1578,6 @@ function EmailReplyModal({
         const ok = await sendOutlookEmail(fromAccount, toAddress.trim(), subject.trim(), body.trim());
         if (!ok) throw new Error('Outlook send failed — check your connection.');
       } else {
-        // Gmail
         const token = fromAccount
           ? await getAccessTokenForEmail(fromAccount)
           : await getAccessToken();
@@ -1401,7 +1595,6 @@ function EmailReplyModal({
   };
 
   if (!obligation) return null;
-
   const ob = obligation as any;
 
   return (
@@ -1435,7 +1628,7 @@ function EmailReplyModal({
               </View>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               {/* To */}
               <Text style={reply.label}>To</Text>
               <TextInput
@@ -1460,17 +1653,100 @@ function EmailReplyModal({
 
               {/* Message */}
               <Text style={reply.label}>Message</Text>
-              <TextInput
-                style={[reply.input, reply.bodyInput]}
-                value={body}
-                onChangeText={setBody}
-                placeholder="Type your reply here…"
-                placeholderTextColor={C.textTer}
-                multiline
-                textAlignVertical="top"
-              />
+              {drafting ? (
+                <View style={[reply.input, reply.bodyInput, reply.draftingBox]}>
+                  <ActivityIndicator color={C.verdigris} size="small" />
+                  <Text style={reply.draftingText}>Drafting professional reply…</Text>
+                </View>
+              ) : (
+                <TextInput
+                  style={[reply.input, reply.bodyInput]}
+                  value={body}
+                  onChangeText={setBody}
+                  placeholder="Type your reply here…"
+                  placeholderTextColor={C.textTer}
+                  multiline
+                  textAlignVertical="top"
+                />
+              )}
 
-              {/* Context note */}
+              {/* ── AI Action Row ───────────────────────────────────────── */}
+              <View style={reply.aiRow}>
+                {/* Improve Tone */}
+                <TouchableOpacity
+                  style={[reply.aiBtn, reply.aiBtnTone, (improving || drafting || !body.trim()) && { opacity: 0.45 }]}
+                  onPress={handleImproveTone}
+                  disabled={improving || drafting || !body.trim()}
+                >
+                  {improving
+                    ? <ActivityIndicator color={C.bg} size="small" style={{ marginRight: 6 }} />
+                    : <Text style={reply.aiBtnIcon}>✨</Text>
+                  }
+                  <Text style={reply.aiBtnText}>{improving ? 'Improving…' : 'Improve Tone'}</Text>
+                </TouchableOpacity>
+
+                {/* Re-draft */}
+                <TouchableOpacity
+                  style={[reply.aiBtn, reply.aiBtnDraft, (drafting || improving) && { opacity: 0.45 }]}
+                  onPress={() => {
+                    setDrafting(true);
+                    autoDraftReply(ob)
+                      .then(d => setBody(d))
+                      .catch(() => setBody(autoDraftWithRules(ob)))
+                      .finally(() => setDrafting(false));
+                  }}
+                  disabled={drafting || improving}
+                >
+                  <Text style={reply.aiBtnIcon}>⚡</Text>
+                  <Text style={[reply.aiBtnText, { color: C.chartreuse }]}>Re-Draft</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* ── Grammar Suggestions ─────────────────────────────────── */}
+              {(ltChecking || ltMatches.length > 0) && (
+                <View style={reply.grammarWrap}>
+                  <TouchableOpacity
+                    style={reply.grammarBadge}
+                    onPress={() => setLtExpanded(e => !e)}
+                    disabled={ltChecking}
+                  >
+                    {ltChecking
+                      ? <ActivityIndicator color={C.orange} size="small" style={{ marginRight: 6 }} />
+                      : <Text style={reply.grammarBadgeIcon}>⚠️</Text>
+                    }
+                    <Text style={reply.grammarBadgeText}>
+                      {ltChecking
+                        ? 'Checking grammar…'
+                        : `${ltMatches.length} grammar suggestion${ltMatches.length !== 1 ? 's' : ''}`
+                      }
+                    </Text>
+                    {!ltChecking && (
+                      <Text style={reply.grammarChevron}>{ltExpanded ? '▲' : '▼'}</Text>
+                    )}
+                  </TouchableOpacity>
+
+                  {ltExpanded && ltMatches.slice(0, 5).map((m, i) => (
+                    <View key={i} style={reply.grammarItem}>
+                      <Text style={reply.grammarMsg} numberOfLines={2}>
+                        {m.shortMessage || m.message}
+                      </Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                        {m.replacements.slice(0, 4).map((r, j) => (
+                          <TouchableOpacity
+                            key={j}
+                            style={reply.grammarFix}
+                            onPress={() => handleApplyFix(m, r.value)}
+                          >
+                            <Text style={reply.grammarFixText}>{r.value}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {/* Context note (Buddy suggests) */}
               {!!ob.executionPath && (
                 <View style={reply.contextBox}>
                   <Text style={reply.contextLabel}>BUDDY SUGGESTS</Text>
@@ -1480,9 +1756,9 @@ function EmailReplyModal({
 
               {/* Send button */}
               <TouchableOpacity
-                style={[reply.sendBtn, (sending || !body.trim()) && { opacity: 0.5 }]}
+                style={[reply.sendBtn, (sending || !body.trim() || drafting) && { opacity: 0.5 }]}
                 onPress={handleSend}
-                disabled={sending || !body.trim()}
+                disabled={sending || !body.trim() || drafting}
               >
                 {sending
                   ? <ActivityIndicator color={C.bg} size="small" />
@@ -1494,7 +1770,7 @@ function EmailReplyModal({
                 <Text style={reply.cancelBtnText}>Cancel</Text>
               </TouchableOpacity>
 
-              <View style={{ height: 24 }} />
+              <View style={{ height: 32 }} />
             </ScrollView>
           </View>
         </View>
@@ -1526,6 +1802,29 @@ const reply = StyleSheet.create({
   sendBtnText:   { color: C.bg, fontSize: 15, fontWeight: '700' },
   cancelBtn:     { alignItems: 'center', paddingVertical: 10 },
   cancelBtnText: { color: C.textSec, fontSize: 14 },
+
+  // Drafting placeholder inside body box
+  draftingBox:   { justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 10 },
+  draftingText:  { color: C.textSec, fontSize: 13, fontStyle: 'italic' },
+
+  // AI action row — Improve Tone + Re-Draft
+  aiRow:         { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  aiBtn:         { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 10, paddingVertical: 10, gap: 6 },
+  aiBtnTone:     { backgroundColor: C.verdigris },
+  aiBtnDraft:    { backgroundColor: C.surfaceEl, borderWidth: 1, borderColor: C.chartreuse + '55' },
+  aiBtnIcon:     { fontSize: 15 },
+  aiBtnText:     { color: C.bg, fontSize: 13, fontWeight: '700' },
+
+  // Grammar suggestions
+  grammarWrap:   { marginBottom: 12 },
+  grammarBadge:  { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FF950020', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
+  grammarBadgeIcon: { fontSize: 14 },
+  grammarBadgeText: { color: C.orange, fontSize: 13, fontWeight: '600', flex: 1 },
+  grammarChevron:   { color: C.orange, fontSize: 11 },
+  grammarItem:   { backgroundColor: C.surfaceEl, borderRadius: 8, padding: 10, marginTop: 6, borderWidth: 1, borderColor: C.border },
+  grammarMsg:    { color: C.textSec, fontSize: 12, lineHeight: 16 },
+  grammarFix:    { backgroundColor: C.verdigris + '22', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5, marginRight: 6, borderWidth: 1, borderColor: C.verdigris + '55' },
+  grammarFixText: { color: C.verdigris, fontSize: 12, fontWeight: '600' },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
