@@ -216,8 +216,44 @@ function senderName(from: string): string {
   return from.replace(/<[^>]+>/, '').replace(/"/g, '').trim() || extractEmailFromField(from);
 }
 
+/**
+ * Patterns that mark an email as purely informational — no user action needed.
+ * Checked BEFORE actionable patterns so confirmations/statements are always skipped.
+ */
+const INFORMATIONAL_PATTERNS = /
+  has\s+been\s+(processed|executed|completed|confirmed|placed|dispatched|shipped|delivered|activated|deducted|credited|debited|received|initiated|registered|cancelled|updated|verified|approved|rejected|reversed|settled)|
+  successfully\s+(processed|completed|executed|placed|paid|transferred|verified|activated|updated|submitted|registered|deducted|credited|debited|cancelled|reversed|settled)|
+  transaction\s+(successful|confirmed|completed|done|processed)|
+  (order|booking|reservation|payment|sip|investment|transfer|subscription)\s+(confirmed|successful|received|placed|executed|completed|processed)|
+  (your|the)\s+(sip|emi|payment|transfer|investment|order|transaction|deduction|purchase)\s+(of|for|worth|amounting)?\s*(rs\.?|inr|aed|₹|usd|\$)?\s*[\d,]+.*\s+(has been|was|is)\s+(processed|executed|deducted|completed|successful|confirmed)|
+  weekly\s+(statement|summary|report|digest|combined\s+statement)|
+  monthly\s+(statement|summary|report|newsletter)|
+  account\s+(statement|summary|balance\s+update|activity)|
+  portfolio\s+(summary|update|statement|report)|
+  (your\s+)?statement\s+(for|from|of)\s+(the\s+period|week|month)|
+  mutual\s+fund\s+(statement|confirmation|allotment|folio)|
+  units?\s+(allotted|purchased|redeemed|credited)|
+  nav\s+(updated?|as\s+on)|
+  (we\s+have\s+)?(received|processed|confirmed)\s+your\s+(payment|order|request|application|registration)|
+  receipt\s+(for|of)\s+your|
+  thank\s+you\s+for\s+(your\s+)?(payment|order|purchase|booking|registration|subscribing)|
+  no\s+action\s+(required|needed)|
+  this\s+is\s+(an?\s+)?(automated?|auto-generated|system)\s+(message|notification|email)|
+  (security|privacy)\s+(update|notice|advisory|alert)\s+(from|by)\s+\w|
+  (new\s+)?sign[- ]?in\s+(from|detected|to\s+your)|
+  your\s+(account|password|profile)\s+(has\s+been\s+)?(updated|changed|verified|secured|protected)|
+  (two[- ]?factor|2fa|otp)\s+(enabled|disabled|verified|authentication)|
+  newsletter|unsubscribe\s+from\s+this\s+(email|list)|
+  you('re|\s+are)\s+(now\s+)?(enrolled|subscribed|registered|a\s+member)|
+  welcome\s+to\s+|greetings\s+from\s+
+/ix;
+
 function isActionable(text: string): boolean {
-  return /due|expir|invoice|payment|sign|confirm|renew|reply|respond|feedback|outstanding|overdue|deadline|urgent|action required|please pay|visa|emirates id|registr|insurance|bill|utility|subscription|appointment|awaiting|kindly|please confirm|let me know/i.test(text);
+  // First: filter out purely informational / confirmation emails
+  if (INFORMATIONAL_PATTERNS.test(text)) return false;
+
+  // Then: check for genuine action signals
+  return /due|expir|invoice|sign|renew|reply|respond|feedback|outstanding|overdue|deadline|urgent|action required|please pay|visa|emirates id|registr|insurance|bill|utility|subscription|appointment|awaiting|kindly|please confirm|let me know|payment\s+due|amount\s+due|balance\s+due|please\s+(review|complete|submit|approve|respond|sign|pay|confirm|update|verify)/i.test(text);
 }
 
 /** Parse email snippets into obligations without any AI API call. */
@@ -321,15 +357,32 @@ export async function parseEmailsForObligations(
     .join(', ');
 
   const prompt = `You are an AI assistant analyzing email snippets for a Dubai professional.
-Extract ONLY actionable obligations: deadlines, renewals, payments due, appointments, expiries,
-documents needing signature, and emails requiring a reply.
+Your job is to extract ONLY emails that require the user to take an action — not informational notifications.
 
 EXISTING OBLIGATIONS (do NOT re-extract these): ${existingTitles || 'none'}
+
+━━━ SKIP these — they are informational, no user action needed ━━━
+• Transaction confirmations: "Your SIP of ₹X has been processed", "Payment successful", "Order confirmed"
+• Bank/financial statements: "Weekly combined statement", "Monthly account summary", "Portfolio update"
+• Automated receipts: "Thank you for your payment", "Receipt for your purchase", "Booking confirmed"
+• Security/system notifications: "New sign-in detected", "Password changed", "2FA enabled"
+• Marketing/newsletters: welcome emails, product updates, promotional offers
+• Status updates where the action is already DONE: "Your request has been approved", "Your order has been dispatched"
+• Mutual fund / investment confirmations: unit allotments, NAV updates, SIP execution reports
+
+━━━ INCLUDE these — the user must do something ━━━
+• Payments that are DUE (not already paid): invoice due, bill due, EMI due, outstanding balance
+• Documents needing signature: contract, agreement, form to fill/sign
+• Appointments needing confirmation or attendance: medical, government, meeting requiring RSVP
+• Emails explicitly asking for a reply, response, feedback, or approval
+• Renewals expiring soon: visa, Emirates ID, insurance, vehicle registration, subscription
+• Tasks or follow-ups where the sender is waiting on the user
 
 EMAIL SNIPPETS (source: ${accountLabel || 'inbox'}):
 ${emailSnippets.map((s, i) => `--- Email ${i + 1} ---\n${s}`).join('\n\n')}
 
 Return ONLY a JSON array of new obligations found (not already in the existing list).
+If an email is informational/confirmation with no pending user action, DO NOT include it.
 
 Each item must follow this schema exactly:
 {
@@ -348,10 +401,10 @@ Each item must follow this schema exactly:
 }
 
 Type guide:
-- reply_needed: Email explicitly asks for a response, confirmation, or feedback
+- reply_needed: Email explicitly asks for a response, confirmation, or feedback from the user
 - sign_document: Contract, agreement, or form that needs signing
-- payment: Invoice, bill, or payment that is due
-- appointment: Meeting, medical visit, or booking that needs confirmation
+- payment: Invoice, bill, or payment that is DUE (not already processed)
+- appointment: Meeting, medical visit, or booking that needs confirmation or attendance
 - subscription: Subscription renewal or cancellation needed
 
 If nothing actionable found, return: []`;
