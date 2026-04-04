@@ -6,7 +6,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
   Animated, Modal, TextInput, KeyboardAvoidingView,
-  Platform, StatusBar, ActivityIndicator, Dimensions,
+  Platform, StatusBar, ActivityIndicator, Dimensions, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
