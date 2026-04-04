@@ -488,75 +488,127 @@ function DetailModal({ item, visible, onClose, onResolve, onReply }: any) {
         <TouchableOpacity style={modal.backdrop} onPress={onClose} />
         <View style={modal.sheet}>
           <View style={modal.handle} />
-          <View style={modal.header}>
-            <View style={[modal.icon, { backgroundColor: `${riskColor}18` }]}>
-              <Text style={{ fontSize: 32 }}>{item.emoji}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={modal.title}>{item.title}</Text>
-              <View style={[modal.riskBadge, { backgroundColor: `${riskColor}18` }]}>
-                <Text style={[modal.riskText, { color: riskColor }]}>
-                  {item.risk === 'high' ? '🔴' : item.risk === 'medium' ? '🟡' : '🟢'} {item.risk.toUpperCase()} RISK
-                </Text>
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            {/* Header */}
+            <View style={modal.header}>
+              <View style={[modal.icon, { backgroundColor: `${riskColor}18` }]}>
+                <Text style={{ fontSize: 32 }}>{item.emoji}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={modal.title}>{item.title}</Text>
+                <View style={[modal.riskBadge, { backgroundColor: `${riskColor}18` }]}>
+                  <Text style={[modal.riskText, { color: riskColor }]}>
+                    {item.risk === 'high' ? '🔴' : item.risk === 'medium' ? '🟡' : '🟢'} {item.risk.toUpperCase()} RISK
+                  </Text>
+                </View>
               </View>
             </View>
-          </View>
-          <View style={modal.infoGrid}>
-            <View style={modal.infoItem}>
-              <Text style={modal.infoLabel}>Due in</Text>
-              <Text style={[modal.infoValue, { color: riskColor }]}>{getDaysLabel(item.daysUntil)}</Text>
-            </View>
-            {item.amount && (
+
+            {/* Info grid */}
+            <View style={modal.infoGrid}>
               <View style={modal.infoItem}>
-                <Text style={modal.infoLabel}>Amount</Text>
-                <Text style={modal.infoValue}>AED {item.amount.toLocaleString()}</Text>
+                <Text style={modal.infoLabel}>Due in</Text>
+                <Text style={[modal.infoValue, { color: riskColor }]}>{getDaysLabel(item.daysUntil)}</Text>
+              </View>
+              {item.amount && (
+                <View style={modal.infoItem}>
+                  <Text style={modal.infoLabel}>Amount</Text>
+                  <Text style={modal.infoValue}>AED {item.amount.toLocaleString()}</Text>
+                </View>
+              )}
+              {isReplyType && item.replyTo && (
+                <View style={modal.infoItem}>
+                  <Text style={modal.infoLabel}>Reply to</Text>
+                  <Text style={[modal.infoValue, { fontSize: 11 }]} numberOfLines={1}>{item.replyTo}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Key message — AI-extracted plain-English summary */}
+            {!!item.keyMessage && (
+              <View style={modal.sectionBlock}>
+                <Text style={modal.sectionLabel}>💡 KEY MESSAGE</Text>
+                <Text style={modal.sectionText}>{item.keyMessage}</Text>
               </View>
             )}
-            {isReplyType && item.replyTo && (
-              <View style={modal.infoItem}>
-                <Text style={modal.infoLabel}>Reply to</Text>
-                <Text style={[modal.infoValue, { fontSize: 11 }]} numberOfLines={1}>{item.replyTo}</Text>
+
+            {/* How to resolve */}
+            {!!item.executionPath && (
+              <View style={modal.executionBlock}>
+                <Text style={modal.executionLabel}>HOW TO RESOLVE</Text>
+                <Text style={modal.executionText}>{item.executionPath}</Text>
               </View>
             )}
-          </View>
-          {item.executionPath && (
-            <View style={modal.executionBlock}>
-              <Text style={modal.executionLabel}>HOW TO RESOLVE</Text>
-              <Text style={modal.executionText}>{item.executionPath}</Text>
-            </View>
-          )}
-          <View style={modal.actions}>
-            {/* Reply button — only for reply_needed type */}
-            {isReplyType && !!onReply && (
+
+            {/* Meeting link — join button */}
+            {!!item.meetingLink && (
               <TouchableOpacity
-                style={[modal.primaryBtn, { marginBottom: 10 }]}
-                onPress={() => { onClose(); onReply(item); }}
+                style={modal.meetingBtn}
+                onPress={() => Linking.openURL(item.meetingLink!).catch(() => {})}
+              >
+                <Text style={modal.meetingBtnText}>📹  Join Meeting</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Attachments list */}
+            {Array.isArray(item.attachments) && item.attachments.length > 0 && (
+              <View style={modal.sectionBlock}>
+                <Text style={modal.sectionLabel}>📎 ATTACHMENTS</Text>
+                {item.attachments.map((att: any, idx: number) => (
+                  <View key={idx} style={modal.attachmentRow}>
+                    <Text style={modal.attachmentName} numberOfLines={1}>{att.name}</Text>
+                    <Text style={modal.attachmentSize}>
+                      {att.size > 1024 * 1024
+                        ? `${(att.size / 1024 / 1024).toFixed(1)} MB`
+                        : `${Math.round(att.size / 1024)} KB`}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* Email body */}
+            {!!item.emailBody && (
+              <View style={modal.sectionBlock}>
+                <Text style={modal.sectionLabel}>📧 EMAIL BODY</Text>
+                <Text style={modal.bodyText}>{item.emailBody}</Text>
+              </View>
+            )}
+
+            {/* Action buttons */}
+            <View style={modal.actions}>
+              {/* Reply button — only for reply_needed type */}
+              {isReplyType && !!onReply && (
+                <TouchableOpacity
+                  style={[modal.primaryBtn, { marginBottom: 10 }]}
+                  onPress={() => { onClose(); onReply(item); }}
+                >
+                  <LinearGradient
+                    colors={['#0078D4', C.verdigris]}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                    style={modal.primaryBtnGrad}
+                  >
+                    <Text style={modal.primaryBtnText}>✉️  Compose Reply</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={modal.primaryBtn}
+                onPress={() => { onResolve(item); onClose(); }}
               >
                 <LinearGradient
-                  colors={['#0078D4', C.verdigris]}
+                  colors={[C.verdigris, C.chartreuseB]}
                   start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                   style={modal.primaryBtnGrad}
                 >
-                  <Text style={modal.primaryBtnText}>✉️  Compose Reply</Text>
+                  <Text style={modal.primaryBtnText}>Mark as resolved</Text>
                 </LinearGradient>
               </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={modal.primaryBtn}
-              onPress={() => { onResolve(item); onClose(); }}
-            >
-              <LinearGradient
-                colors={[C.verdigris, C.chartreuseB]}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={modal.primaryBtnGrad}
-              >
-                <Text style={modal.primaryBtnText}>Mark as resolved</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-            <TouchableOpacity style={modal.secondaryBtn} onPress={onClose}>
-              <Text style={modal.secondaryBtnText}>Remind me later</Text>
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity style={modal.secondaryBtn} onPress={onClose}>
+                <Text style={modal.secondaryBtnText}>Remind me later</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -2492,6 +2544,26 @@ const modal = StyleSheet.create({
     borderWidth: 1, borderColor: C.border,
   },
   secondaryBtnText: { color: C.textSec, fontSize: 15, fontWeight: '500' },
+  // ── New email-content sections ─────────────────────────────────────────────
+  sectionBlock: {
+    backgroundColor: C.surfaceEl, borderRadius: 14, padding: 14,
+    marginBottom: 14, borderWidth: 1, borderColor: C.border,
+  },
+  sectionLabel: { color: C.textTer, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 6 },
+  sectionText:  { color: C.textSec, fontSize: 14, lineHeight: 20 },
+  bodyText:     { color: C.textSec, fontSize: 13, lineHeight: 19, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  meetingBtn: {
+    backgroundColor: '#1a6b5c', borderRadius: 14, paddingVertical: 14,
+    alignItems: 'center', marginBottom: 14,
+    borderWidth: 1, borderColor: C.verdigris,
+  },
+  meetingBtnText: { color: C.chartreuse, fontSize: 15, fontWeight: '700' },
+  attachmentRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  attachmentName: { color: C.white, fontSize: 13, flex: 1, marginRight: 8 },
+  attachmentSize: { color: C.textTer, fontSize: 12 },
 });
 
 const add = StyleSheet.create({

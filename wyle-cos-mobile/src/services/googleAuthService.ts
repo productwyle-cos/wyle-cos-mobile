@@ -461,11 +461,14 @@ export async function getAccessTokenForEmail(email: string): Promise<string | nu
   const token  = await getItem(keys.ACCESS_TOKEN);
   const expiry = await getItem(keys.TOKEN_EXPIRY);
   if (!token) return null;
-  if (expiry && Date.now() < parseInt(expiry) - 60_000) return token;
-  // refresh
+  // No expiry stored → return the token optimistically (avoids unnecessary refresh)
+  if (!expiry) return token;
+  if (Date.now() < parseInt(expiry) - 60_000) return token;
+  // Token is expired — attempt refresh
   const refresh = await getItem(keys.REFRESH_TOKEN);
   const clientId = getClientId();
-  if (!refresh || !clientId) return null;
+  // No refresh token → return the existing token and let the API tell us if it's rejected
+  if (!refresh || !clientId) return token;
   try {
     const refreshBody: Record<string, string> = { client_id: clientId, refresh_token: refresh, grant_type: 'refresh_token' };
     const clientSecret = getClientSecret();

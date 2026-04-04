@@ -8,6 +8,67 @@ import { getAllOutlookAccounts, getAccessTokenForOutlookEmail } from './outlookA
 
 const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 
+// ── Gmail body helpers ────────────────────────────────────────────────────────
+function decodeBase64Url(data: string): string {
+  try {
+    const b64 = data.replace(/-/g, '+').replace(/_/g, '/');
+    return decodeURIComponent(
+      atob(b64)
+        .split('')
+        .map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))
+        .join('')
+    );
+  } catch {
+    return '';
+  }
+}
+
+function extractGmailPlainText(payload: any): string {
+  if (!payload) return '';
+  const mimeType: string = payload.mimeType ?? '';
+  if (mimeType === 'text/plain' && payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+  if (mimeType === 'text/html' && payload.body?.data) {
+    const html = decodeBase64Url(payload.body.data);
+    return html.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  }
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      const text = extractGmailPlainText(part);
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+function extractGmailAttachments(payload: any): { name: string; mimeType: string; size: number }[] {
+  if (!payload) return [];
+  const attachments: { name: string; mimeType: string; size: number }[] = [];
+  function walk(part: any) {
+    if (!part) return;
+    if (part.filename && part.filename.length > 0 && part.body?.attachmentId) {
+      attachments.push({
+        name:     part.filename,
+        mimeType: part.mimeType ?? 'application/octet-stream',
+        size:     part.body.size ?? 0,
+      });
+    }
+    if (part.parts) part.parts.forEach(walk);
+  }
+  walk(payload);
+  return attachments;
+}
+
+function cleanEmailBody(raw: string, maxLen = 600): string {
+  return raw
+    .replace(/https?:\/\/\S+/g, '[link]')   // strip raw URLs
+    .replace(/[^\S\n]+/g, ' ')              // collapse spaces
+    .replace(/\n{3,}/g, '\n\n')             // collapse blank lines
+    .trim()
+    .slice(0, maxLen);
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type CalendarEvent = {
   id:       string;
@@ -30,33 +91,76 @@ export type MultiAccountScanResult = SignalScanResult & {
 
 // ── Gmail API ─────────────────────────────────────────────────────────────────
 /**
- * Fetches up to 20 recent email snippets from Gmail (subject + from + snippet).
- * We only read metadata — no full bodies — for privacy.
+ * Fetches up to 20 recent email snippets from Gmail.
+ * Uses format=full to get message body, attachments and meeting links.
  */
 export async function fetchRecentGmailEmails(accessToken: string): Promise<string[]> {
   const listRes = await fetch(
     'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=20&q=newer_than:7d',
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
+
+  if (!listRes.ok) {
+    const errText = await listRes.text().catch(() => '');
+    console.warn(`[Gmail] List messages failed ${listRes.status}:`, errText);
+    return [];
+  }
+
   const listData = await listRes.json();
   if (!listData.messages) return [];
 
+  // Fetch all messages in parallel for speed
+  const fetches = listData.messages.slice(0, 20).map(async (msg: any) => {
+    try {
+      const msgRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (!msgRes.ok) return null;
+      return await msgRes.json();
+    } catch {
+      return null;
+    }
+  });
+
+  const results = await Promise.allSettled(fetches);
   const snippets: string[] = [];
-  for (const msg of listData.messages.slice(0, 20)) {
-    const msgRes = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const msgData = await msgRes.json();
+
+  for (const result of results) {
+    if (result.status !== 'fulfilled' || !result.value) continue;
+    const msgData = result.value;
     const headers: any[] = msgData.payload?.headers ?? [];
     const subject = headers.find((h: any) => h.name === 'Subject')?.value ?? '';
     const from    = headers.find((h: any) => h.name === 'From')?.value ?? '';
+    const date    = headers.find((h: any) => h.name === 'Date')?.value ?? '';
     const snippet = msgData.snippet ?? '';
-    if (subject || snippet) {
-      const date = headers.find((h: any) => h.name === 'Date')?.value ?? '';
-      snippets.push(`FROM: ${from}\nDATE: ${date}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`);
-    }
+
+    // Extract body, attachments, meeting links
+    const rawBody     = extractGmailPlainText(msgData.payload);
+    const body        = cleanEmailBody(rawBody);
+    const atts        = extractGmailAttachments(msgData.payload);
+    const meetingLink = extractMeetingLink(rawBody);
+
+    const fullText = `${subject} ${snippet} ${body}`;
+
+    // Skip purely informational emails early (before any API call)
+    if (isInformational(fullText)) continue;
+
+    // Skip stale "join immediately" emails
+    if (isStaleImmediateRequest(fullText, date)) continue;
+
+    const attSummary = atts.length > 0
+      ? atts.map(a => `${a.name} (${Math.round(a.size / 1024)}KB)`).join(', ')
+      : '';
+
+    let line = `ID: ${msgData.id}\nFROM: ${from}\nDATE: ${date}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`;
+    if (body)        line += `\nBODY: ${body}`;
+    if (attSummary)  line += `\nATTACHMENTS: ${attSummary}`;
+    if (meetingLink) line += `\nMEETING_LINK: ${meetingLink}`;
+
+    snippets.push(line);
   }
+
   return snippets;
 }
 
@@ -66,7 +170,7 @@ export const fetchRecentEmails = fetchRecentGmailEmails;
 // ── Outlook / Microsoft Graph API ─────────────────────────────────────────────
 /**
  * Fetches up to 20 recent email snippets from Outlook via Microsoft Graph.
- * Reads subject, from, receivedDateTime, and bodyPreview (≈ snippet equivalent).
+ * Reads subject, from, receivedDateTime, and bodyPreview (approximately snippet equivalent).
  * No full message bodies are fetched.
  */
 export async function fetchRecentOutlookEmails(accessToken: string): Promise<string[]> {
@@ -217,6 +321,7 @@ function senderName(from: string): string {
   return from.replace(/<[^>]+>/, '').replace(/"/g, '').trim() || extractEmailFromField(from);
 }
 
+/** Returns true if the email is purely informational — no user action needed. */
 function isInformational(text: string): boolean {
   return (
     /has\s+been\s+(processed|executed|completed|confirmed|placed|dispatched|shipped|delivered|activated|deducted|credited|debited|received|initiated|registered|cancelled|updated|verified|approved|rejected|reversed|settled)/i.test(text) ||
@@ -253,7 +358,6 @@ function isActionable(text: string): boolean {
   return /due|expir|invoice|sign|renew|reply|respond|feedback|outstanding|overdue|deadline|urgent|action required|please pay|visa|emirates id|registr|insurance|bill|utility|subscription|appointment|awaiting|kindly|please confirm|let me know|payment\s+due|amount\s+due|balance\s+due|please\s+(review|complete|submit|approve|respond|sign|pay|confirm|update|verify)/i.test(text);
 }
 
-
 // Generic subjects that carry no context on their own
 const GENERIC_SUBJECTS = /^(urgent|important|hi|hello|hey|fyi|follow up|follow-up|update|re|fw|fwd|greetings|good morning|good afternoon|reminder|attention|notice|ping|checking in|quick question|request|query)\.?$/i;
 
@@ -273,12 +377,12 @@ function isStaleImmediateRequest(fullText: string, dateRaw: string): boolean {
 }
 
 /** Build a meaningful title when subject is generic like "Urgent" or "Hi". */
-function buildTitle(subject: string, snippet: string, sender: string): string {
+function buildTitle(subject: string, body: string, sender: string): string {
   if (!GENERIC_SUBJECTS.test(subject.trim())) {
     return subject.replace(/^(fwd?:|re:|fw:|action required:|urgent:)\s*/i, '').trim();
   }
-  const fromSnippet = snippet.replace(/\s+/g, ' ').trim().slice(0, 60);
-  if (fromSnippet.length > 10) return fromSnippet + (snippet.length > 60 ? '…' : '');
+  const fromSnippet = body.replace(/\s+/g, ' ').trim().slice(0, 60);
+  if (fromSnippet.length > 10) return fromSnippet + (body.length > 60 ? '…' : '');
   return `Message from ${sender}`;
 }
 
@@ -294,12 +398,16 @@ export function parseEmailsWithRules(
   const results: UIObligation[] = [];
 
   for (let i = 0; i < emailSnippets.length; i++) {
-    const raw     = emailSnippets[i];
-    const fromRaw = raw.match(/^FROM:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const dateRaw = raw.match(/^DATE:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const subject = raw.match(/^SUBJECT:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const snippet = raw.match(/^SNIPPET:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const fullText = `${subject} ${snippet}`;
+    const raw        = emailSnippets[i];
+    const emailId    = raw.match(/^ID:\s*(.+)$/m)?.[1]?.trim() ?? null;
+    const fromRaw    = raw.match(/^FROM:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const dateRaw    = raw.match(/^DATE:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const subject    = raw.match(/^SUBJECT:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const snippet    = raw.match(/^SNIPPET:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const bodyLine   = raw.match(/^BODY:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const attLine    = raw.match(/^ATTACHMENTS:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const meetingUrl = raw.match(/^MEETING_LINK:\s*(.+)$/m)?.[1]?.trim() ?? null;
+    const fullText   = `${subject} ${snippet} ${bodyLine}`;
 
     if (!isActionable(fullText)) continue;
     if (isStaleImmediateRequest(fullText, dateRaw)) continue;
@@ -309,7 +417,6 @@ export function parseEmailsWithRules(
     const amount     = extractAmount(fullText);
     const sender     = senderName(fromRaw);
     const replyEmail = extractEmailFromField(fromRaw);
-    const meetingLink = extractMeetingLink(fullText);
 
     let daysUntil = dateFound
       ? Math.max(0, calcDaysUntil(dateFound))
@@ -318,7 +425,8 @@ export function parseEmailsWithRules(
     const risk: 'high' | 'medium' | 'low' =
       daysUntil <= 7 ? 'high' : daysUntil <= 30 ? 'medium' : 'low';
 
-    const title = buildTitle(subject, snippet, sender);
+    // Build title — use body when subject is generic
+    const title = buildTitle(subject, bodyLine || snippet, sender);
 
     // Skip if very similar to an existing active obligation
     const titleNorm = title.toLowerCase().trim();
@@ -340,6 +448,14 @@ export function parseEmailsWithRules(
       default:                executionPath = `Handle: ${subject || `email from ${sender}`}`;
     }
 
+    // Parse attachments from summary line
+    const parsedAttachments = attLine
+      ? attLine.split(',').map(a => {
+          const m = a.trim().match(/^(.+?)\s*\((\d+)KB\)$/);
+          return m ? { name: m[1], mimeType: 'application/octet-stream', size: parseInt(m[2]) * 1024 } : null;
+        }).filter(Boolean) as { name: string; mimeType: string; size: number }[]
+      : null;
+
     results.push({
       _id:          `rule_${i}_${Date.now()}`,
       emoji,
@@ -353,7 +469,12 @@ export function parseEmailsWithRules(
       notes:        `source: email from ${sender}`,
       replyTo:      type === 'reply_needed' ? replyEmail : null,
       replySubject: type === 'reply_needed' ? `Re: ${subject}` : null,
-      meetingLink:  meetingLink ?? null,
+      meetingLink:  meetingUrl ?? null,
+      keyMessage:   bodyLine ? bodyLine.slice(0, 120) : null,
+      emailId:      emailId,
+      provider:     'google',
+      emailBody:    bodyLine || null,
+      attachments:  parsedAttachments?.length ? parsedAttachments : null,
     });
   }
 
@@ -384,18 +505,20 @@ export async function parseEmailsForObligations(
     .join(', ');
 
   const prompt = `You are an AI assistant analyzing email snippets for a Dubai professional.
+Today's date is ${new Date().toISOString().slice(0, 10)}.
 Your job is to extract ONLY emails that require the user to take an action — not informational notifications.
 
-━━━ SKIP these — they are informational, no user action needed ━━━
-• Transaction confirmations: "Your SIP of ₹X has been processed", "Payment successful", "Order confirmed"
+━━━ ALWAYS SKIP (no user action needed) ━━━
+• Transaction confirmations: "Your SIP of X has been processed", "Payment successful", "Order confirmed"
 • Bank/financial statements: "Weekly combined statement", "Monthly account summary", "Portfolio update"
 • Automated receipts: "Thank you for your payment", "Receipt for your purchase", "Booking confirmed"
 • Security/system notifications: "New sign-in detected", "Password changed", "2FA enabled"
 • Marketing/newsletters: welcome emails, product updates, promotional offers
 • Status updates where the action is already DONE: "Your request has been approved", "Your order has been dispatched"
 • Mutual fund / investment confirmations: unit allotments, NAV updates, SIP execution reports
+• "Join immediately" / "respond now" emails received MORE THAN 4 hours ago (stale)
 
-━━━ INCLUDE these — the user must do something ━━━
+━━━ ALWAYS INCLUDE (user must do something) ━━━
 • Payments that are DUE (not already paid): invoice due, bill due, EMI due, outstanding balance
 • Documents needing signature: contract, agreement, form to fill/sign
 • Appointments needing confirmation or attendance: medical, government, meeting requiring RSVP
@@ -408,7 +531,10 @@ EXISTING OBLIGATIONS (do NOT re-extract these): ${existingTitles || 'none'}
 EMAIL SNIPPETS (source: ${accountLabel || 'inbox'}):
 ${emailSnippets.map((s, i) => `--- Email ${i + 1} ---\n${s}`).join('\n\n')}
 
-Return ONLY a JSON array of new obligations found (not already in the existing list).
+TITLE RULE: If the SUBJECT is generic ("Urgent", "Hi", "FWD", "Follow up", no-subject, etc.),
+use the BODY field to craft a specific 5-10 word title describing the required action.
+
+Return ONLY a JSON array of new obligations (skip already listed ones).
 If an email is informational/confirmation with no pending user action, DO NOT include it.
 
 Each item must follow this schema exactly:
@@ -417,22 +543,17 @@ Each item must follow this schema exactly:
   "emoji": "...",
   "title": "...",
   "type": one of: "visa|emirates_id|car_registration|insurance|bill|school_fee|medical|appointment|payment|subscription|reply_needed|sign_document|task|other",
-  "daysUntil": NUMBER (days from today until action is needed; use 1 if urgent/same day),
-  "risk": "high" (< 7 days) | "medium" (7–30 days) | "low" (> 30 days),
+  "daysUntil": NUMBER (days from today; use 1 if urgent/same day),
+  "risk": "high" (<=7 days) | "medium" (8-30 days) | "low" (>30 days),
   "amount": NUMBER or null,
   "status": "active",
   "executionPath": "one sentence on how to handle this",
   "notes": "source: email from [sender name]",
-  "replyTo": "email address to reply to, if type is reply_needed — else null",
-  "replySubject": "Re: original subject, if type is reply_needed — else null"
+  "replyTo": "email address if type is reply_needed -- else null",
+  "replySubject": "Re: original subject if type is reply_needed -- else null",
+  "meetingLink": "Zoom/Meet/Teams URL from MEETING_LINK field -- else null",
+  "keyMessage": "1-2 sentence plain-English summary of what this email wants the user to do -- else null"
 }
-
-Type guide:
-- reply_needed: Email explicitly asks for a response, confirmation, or feedback
-- sign_document: Contract, agreement, or form that needs signing
-- payment: Invoice, bill, or payment that is due
-- appointment: Meeting, medical visit, or booking that needs confirmation
-- subscription: Subscription renewal or cancellation needed
 
 If nothing actionable found, return: []`;
 
@@ -454,7 +575,7 @@ If nothing actionable found, return: []`;
 
     // ── If Claude API fails (low credits, bad key, rate limit) → rule-based ──
     if (!res.ok) {
-      console.warn(`[SignalService] Claude API error ${res.status} — using rule-based parser`);
+      console.warn(`[SignalService] Claude API error ${res.status} -- using rule-based parser`);
       return parseEmailsWithRules(emailSnippets, existingObligations);
     }
 
@@ -462,7 +583,7 @@ If nothing actionable found, return: []`;
 
     // Catch credit exhaustion / quota errors returned in the body
     if (data.error || !data.content) {
-      console.warn('[SignalService] Claude API quota/error — using rule-based parser', data.error?.type);
+      console.warn('[SignalService] Claude API quota/error -- using rule-based parser', data.error?.type);
       return parseEmailsWithRules(emailSnippets, existingObligations);
     }
 
@@ -471,8 +592,8 @@ If nothing actionable found, return: []`;
     const items: UIObligation[] = JSON.parse(clean);
     return items.map((item, i) => ({ ...item, _id: `email_${i}_${Date.now()}` }));
   } catch {
-    // Network error or JSON parse failure → fall back to rules
-    console.warn('[SignalService] Claude call failed — using rule-based parser');
+    // Network error or JSON parse failure -- fall back to rules
+    console.warn('[SignalService] Claude call failed -- using rule-based parser');
     return parseEmailsWithRules(emailSnippets, existingObligations);
   }
 }
@@ -494,7 +615,7 @@ export async function parseCalendarForObligations(
   ).join('\n');
 
   const prompt = `You are analyzing a Dubai professional's Google Calendar for the next 30 days.
-Extract ONLY items that represent obligations, payments, appointments, renewals, or deadlines — NOT regular work meetings.
+Extract ONLY items that represent obligations, payments, appointments, renewals, or deadlines -- NOT regular work meetings.
 
 EXISTING OBLIGATIONS (skip these): ${existingTitles || 'none'}
 
@@ -531,7 +652,7 @@ If no obligations found, return: []`;
 }
 
 // ── Single-account scan: Gmail + Google Calendar ──────────────────────────────
-/** Original single-token scan — kept for backwards compatibility with ConnectScreen. */
+/** Original single-token scan -- kept for backwards compatibility with ConnectScreen. */
 export async function runFullSignalScan(
   accessToken: string,
   existingObligations: UIObligation[]
@@ -576,14 +697,27 @@ export async function runMultiAccountSignalScan(
   // ── Scan all Google accounts ─────────────────────────────────────────────
   await Promise.allSettled(
     googleAccounts.map(async (email) => {
+      // Always count this account as scanned -- even if individual fetches fail
+      accountsScanned.push({ email, provider: 'google' });
       try {
         const token = await getAccessTokenForEmail(email);
-        if (!token) { errors.push({ email, error: 'No valid token' }); return; }
+        if (!token) {
+          errors.push({ email, error: 'No valid token -- please reconnect your Google account' });
+          return;
+        }
 
-        const [snippets, events] = await Promise.all([
+        // Use allSettled so a Gmail 401 does not block the calendar fetch
+        const [snippetsResult, eventsResult] = await Promise.allSettled([
           fetchRecentGmailEmails(token),
           fetchCalendarEvents(token),
         ]);
+
+        const snippets = snippetsResult.status === 'fulfilled' ? snippetsResult.value : [];
+        const events   = eventsResult.status  === 'fulfilled' ? eventsResult.value  : [];
+
+        if (snippetsResult.status === 'rejected') {
+          errors.push({ email, error: `Gmail fetch failed: ${(snippetsResult.reason as any)?.message ?? 'unknown'}` });
+        }
 
         const currentExisting = [...existingObligations, ...allObligations];
         const [emailObs, calObs] = await Promise.all([
@@ -593,7 +727,6 @@ export async function runMultiAccountSignalScan(
 
         allObligations.push(...emailObs, ...calObs);
         allCalendarEvents.push(...events);
-        accountsScanned.push({ email, provider: 'google' });
       } catch (e: any) {
         errors.push({ email, error: e?.message ?? 'Unknown error' });
       }
@@ -603,6 +736,7 @@ export async function runMultiAccountSignalScan(
   // ── Scan all Outlook accounts ────────────────────────────────────────────
   await Promise.allSettled(
     outlookAccounts.map(async (email) => {
+      accountsScanned.push({ email, provider: 'outlook' });
       try {
         const token = await getAccessTokenForOutlookEmail(email);
         if (!token) { errors.push({ email, error: 'No valid token' }); return; }
@@ -614,7 +748,6 @@ export async function runMultiAccountSignalScan(
         );
 
         allObligations.push(...emailObs);
-        accountsScanned.push({ email, provider: 'outlook' });
       } catch (e: any) {
         errors.push({ email, error: e?.message ?? 'Unknown error' });
       }
@@ -629,7 +762,7 @@ export async function runMultiAccountSignalScan(
   if (totalAccounts === 0) {
     summary = 'No email accounts connected. Connect Gmail or Outlook to start scanning.';
   } else if (totalNew === 0) {
-    summary = `Scanned ${totalAccounts} account${totalAccounts > 1 ? 's' : ''} — no new obligations found.`;
+    summary = `Scanned ${totalAccounts} account${totalAccounts > 1 ? 's' : ''} -- no new obligations found.`;
   } else {
     summary = `Found ${totalNew} new obligation${totalNew > 1 ? 's' : ''} across ${totalAccounts} account${totalAccounts > 1 ? 's' : ''}.`;
   }
