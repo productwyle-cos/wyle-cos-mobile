@@ -216,8 +216,40 @@ function senderName(from: string): string {
   return from.replace(/<[^>]+>/, '').replace(/"/g, '').trim() || extractEmailFromField(from);
 }
 
+function isInformational(text: string): boolean {
+  return (
+    /has\s+been\s+(processed|executed|completed|confirmed|placed|dispatched|shipped|delivered|activated|deducted|credited|debited|received|initiated|registered|cancelled|updated|verified|approved|rejected|reversed|settled)/i.test(text) ||
+    /successfully\s+(processed|completed|executed|placed|paid|transferred|verified|activated|updated|submitted|registered|deducted|credited|debited|cancelled|reversed|settled)/i.test(text) ||
+    /transaction\s+(successful|confirmed|completed|done|processed)/i.test(text) ||
+    /sip\s+transaction\s+confirmation/i.test(text) ||
+    /systematic\s+investment\s+(purchase|plan)\s+of\s+units/i.test(text) ||
+    /your\s+request\s+for\s+systematic\s+investment/i.test(text) ||
+    /(order|booking|reservation|payment|sip|investment|transfer|subscription)\s+(confirmed|successful|received|placed|executed|completed|processed)/i.test(text) ||
+    /units?\s+(allotted|purchased|redeemed|credited)/i.test(text) ||
+    /nav\s+(updated?|as\s+on)/i.test(text) ||
+    /mutual\s+fund\s+(statement|confirmation|allotment|folio)/i.test(text) ||
+    /weekly\s+(statement|summary|report|digest|combined\s+statement)/i.test(text) ||
+    /monthly\s+(statement|summary|report|newsletter)/i.test(text) ||
+    /account\s+(statement|summary|balance\s+update|activity)/i.test(text) ||
+    /portfolio\s+(summary|update|statement|report)/i.test(text) ||
+    /statement\s+(for|from|of)\s+(the\s+period|week|month)/i.test(text) ||
+    /(received|processed|confirmed)\s+your\s+(payment|order|request|application|registration)/i.test(text) ||
+    /receipt\s+(for|of)\s+your/i.test(text) ||
+    /thank\s+you\s+for\s+(your\s+)?(payment|order|purchase|booking|registration|subscribing)/i.test(text) ||
+    /no\s+action\s+(required|needed)/i.test(text) ||
+    /kindly\s+do\s+not\s+respond/i.test(text) ||
+    /auto\s*generated\s+email/i.test(text) ||
+    /this\s+is\s+an?\s+(automated?|auto-generated|system)\s+(message|notification|email)/i.test(text) ||
+    /newsletter/i.test(text) ||
+    /unsubscribe\s+from\s+this\s+(email|list)/i.test(text) ||
+    /welcome\s+to\s+/i.test(text) ||
+    /greetings\s+from\s+/i.test(text)
+  );
+}
+
 function isActionable(text: string): boolean {
-  return /due|expir|invoice|payment|sign|confirm|renew|reply|respond|feedback|outstanding|overdue|deadline|urgent|action required|please pay|visa|emirates id|registr|insurance|bill|utility|subscription|appointment|awaiting|kindly|please confirm|let me know/i.test(text);
+  if (isInformational(text)) return false;
+  return /due|expir|invoice|sign|renew|reply|respond|feedback|outstanding|overdue|deadline|urgent|action required|please pay|visa|emirates id|registr|insurance|bill|utility|subscription|appointment|awaiting|kindly|please confirm|let me know|payment\s+due|amount\s+due|balance\s+due|please\s+(review|complete|submit|approve|respond|sign|pay|confirm|update|verify)/i.test(text);
 }
 
 /** Parse email snippets into obligations without any AI API call. */
