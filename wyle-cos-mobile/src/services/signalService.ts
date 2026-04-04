@@ -53,7 +53,8 @@ export async function fetchRecentGmailEmails(accessToken: string): Promise<strin
     const from    = headers.find((h: any) => h.name === 'From')?.value ?? '';
     const snippet = msgData.snippet ?? '';
     if (subject || snippet) {
-      snippets.push(`FROM: ${from}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`);
+      const date = headers.find((h: any) => h.name === 'Date')?.value ?? '';
+      snippets.push(`FROM: ${from}\nDATE: ${date}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`);
     }
   }
   return snippets;
@@ -96,7 +97,7 @@ export async function fetchRecentOutlookEmails(accessToken: string): Promise<str
     const from    = msg.from?.emailAddress?.address ?? msg.from?.emailAddress?.name ?? '';
     const subject = msg.subject ?? '';
     const snippet = msg.bodyPreview ?? '';
-    return `FROM: ${from}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`;
+    return `FROM: ${from}\nDATE: ${msg.receivedDateTime ?? ''}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`;
   }).filter(s => s.length > 20); // skip empty/malformed entries
 }
 
@@ -252,6 +253,35 @@ function isActionable(text: string): boolean {
   return /due|expir|invoice|sign|renew|reply|respond|feedback|outstanding|overdue|deadline|urgent|action required|please pay|visa|emirates id|registr|insurance|bill|utility|subscription|appointment|awaiting|kindly|please confirm|let me know|payment\s+due|amount\s+due|balance\s+due|please\s+(review|complete|submit|approve|respond|sign|pay|confirm|update|verify)/i.test(text);
 }
 
+
+// Generic subjects that carry no context on their own
+const GENERIC_SUBJECTS = /^(urgent|important|hi|hello|hey|fyi|follow up|follow-up|update|re|fw|fwd|greetings|good morning|good afternoon|reminder|attention|notice|ping|checking in|quick question|request|query)\.?$/i;
+
+/** Extracts a Zoom / Google Meet / Teams join URL from text, if present. */
+function extractMeetingLink(text: string): string | null {
+  const m = text.match(/https:\/\/([w.-]*\.)?(zoom\.us\/j|meet\.google\.com|teams\.microsoft\.com\/l\/meetup-join|gotomeet\.me|webex\.com\/meet)[\w\-/?=&#%.]+/i);
+  return m ? m[0] : null;
+}
+
+/** Returns true if the email is time-sensitive AND was sent more than 4 hours ago. */
+function isStaleImmediateRequest(fullText: string, dateRaw: string): boolean {
+  if (!/immediately|right\s+now|join\s+now|asap|urgent\s+urgent|come\s+now|hop\s+on|jump\s+on/i.test(fullText)) return false;
+  if (!dateRaw) return false;
+  const sent = new Date(dateRaw);
+  if (isNaN(sent.getTime())) return false;
+  return (Date.now() - sent.getTime()) / 3_600_000 > 4;
+}
+
+/** Build a meaningful title when subject is generic like "Urgent" or "Hi". */
+function buildTitle(subject: string, snippet: string, sender: string): string {
+  if (!GENERIC_SUBJECTS.test(subject.trim())) {
+    return subject.replace(/^(fwd?:|re:|fw:|action required:|urgent:)\s*/i, '').trim();
+  }
+  const fromSnippet = snippet.replace(/\s+/g, ' ').trim().slice(0, 60);
+  if (fromSnippet.length > 10) return fromSnippet + (snippet.length > 60 ? '…' : '');
+  return `Message from ${sender}`;
+}
+
 /** Parse email snippets into obligations without any AI API call. */
 export function parseEmailsWithRules(
   emailSnippets: string[],
@@ -266,17 +296,20 @@ export function parseEmailsWithRules(
   for (let i = 0; i < emailSnippets.length; i++) {
     const raw     = emailSnippets[i];
     const fromRaw = raw.match(/^FROM:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const dateRaw = raw.match(/^DATE:\s*(.+)$/m)?.[1]?.trim() ?? '';
     const subject = raw.match(/^SUBJECT:\s*(.+)$/m)?.[1]?.trim() ?? '';
     const snippet = raw.match(/^SNIPPET:\s*(.+)$/m)?.[1]?.trim() ?? '';
     const fullText = `${subject} ${snippet}`;
 
     if (!isActionable(fullText)) continue;
+    if (isStaleImmediateRequest(fullText, dateRaw)) continue;
 
     const { type, emoji } = detectType(fullText);
     const dateFound  = extractDateFromText(fullText);
     const amount     = extractAmount(fullText);
     const sender     = senderName(fromRaw);
     const replyEmail = extractEmailFromField(fromRaw);
+    const meetingLink = extractMeetingLink(fullText);
 
     let daysUntil = dateFound
       ? Math.max(0, calcDaysUntil(dateFound))
@@ -285,10 +318,7 @@ export function parseEmailsWithRules(
     const risk: 'high' | 'medium' | 'low' =
       daysUntil <= 7 ? 'high' : daysUntil <= 30 ? 'medium' : 'low';
 
-    // Build title from subject (trim boilerplate prefixes)
-    const title = subject
-      .replace(/^(fwd?:|re:|fw:|action required:|urgent:)\s*/i, '')
-      .trim() || `Email from ${sender}`;
+    const title = buildTitle(subject, snippet, sender);
 
     // Skip if very similar to an existing active obligation
     const titleNorm = title.toLowerCase().trim();
@@ -323,6 +353,7 @@ export function parseEmailsWithRules(
       notes:        `source: email from ${sender}`,
       replyTo:      type === 'reply_needed' ? replyEmail : null,
       replySubject: type === 'reply_needed' ? `Re: ${subject}` : null,
+      meetingLink:  meetingLink ?? null,
     });
   }
 

@@ -86,6 +86,8 @@ export interface UIObligation {
   // Email reply fields — populated when type === 'reply_needed'
   replyTo?: string | null;
   replySubject?: string | null;
+  // Meeting link — populated when email contains a Zoom/Meet/Teams URL
+  meetingLink?: string | null;
 }
 
 // Helper — converts backend Obligation to UIObligation when API is ready
