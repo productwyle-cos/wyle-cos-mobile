@@ -46,3 +46,4 @@ coverage/
 # Editor
 .vscode/
 .idea/
+.env
