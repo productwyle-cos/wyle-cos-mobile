@@ -91,8 +91,9 @@ export type MultiAccountScanResult = SignalScanResult & {
 
 // ── Gmail API ─────────────────────────────────────────────────────────────────
 /**
- * Fetches up to 20 recent email snippets from Gmail.
- * Uses format=full to get message body, attachments and meeting links.
+ * Fetches up to 20 recent email snippets from Gmail using metadata only.
+ * Reads Subject, From, Date headers + the short snippet Google generates.
+ * Filters out informational/automated emails before returning.
  */
 export async function fetchRecentGmailEmails(accessToken: string): Promise<string[]> {
   const listRes = await fetch(
@@ -109,11 +110,11 @@ export async function fetchRecentGmailEmails(accessToken: string): Promise<strin
   const listData = await listRes.json();
   if (!listData.messages) return [];
 
-  // Fetch all messages in parallel for speed
+  // Fetch metadata in parallel for speed
   const fetches = listData.messages.slice(0, 20).map(async (msg: any) => {
     try {
       const msgRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`,
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       if (!msgRes.ok) return null;
@@ -135,30 +136,15 @@ export async function fetchRecentGmailEmails(accessToken: string): Promise<strin
     const date    = headers.find((h: any) => h.name === 'Date')?.value ?? '';
     const snippet = msgData.snippet ?? '';
 
-    // Extract body, attachments, meeting links
-    const rawBody     = extractGmailPlainText(msgData.payload);
-    const body        = cleanEmailBody(rawBody);
-    const atts        = extractGmailAttachments(msgData.payload);
-    const meetingLink = extractMeetingLink(rawBody);
+    const fullText = `${subject} ${snippet}`;
 
-    const fullText = `${subject} ${snippet} ${body}`;
-
-    // Skip purely informational emails early (before any API call)
+    // Skip purely informational emails (confirmations, statements, digests)
     if (isInformational(fullText)) continue;
 
-    // Skip stale "join immediately" emails
+    // Skip stale "join immediately" urgent requests
     if (isStaleImmediateRequest(fullText, date)) continue;
 
-    const attSummary = atts.length > 0
-      ? atts.map(a => `${a.name} (${Math.round(a.size / 1024)}KB)`).join(', ')
-      : '';
-
-    let line = `ID: ${msgData.id}\nFROM: ${from}\nDATE: ${date}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`;
-    if (body)        line += `\nBODY: ${body}`;
-    if (attSummary)  line += `\nATTACHMENTS: ${attSummary}`;
-    if (meetingLink) line += `\nMEETING_LINK: ${meetingLink}`;
-
-    snippets.push(line);
+    snippets.push(`FROM: ${from}\nDATE: ${date}\nSUBJECT: ${subject}\nSNIPPET: ${snippet}`);
   }
 
   return snippets;
@@ -398,16 +384,12 @@ export function parseEmailsWithRules(
   const results: UIObligation[] = [];
 
   for (let i = 0; i < emailSnippets.length; i++) {
-    const raw        = emailSnippets[i];
-    const emailId    = raw.match(/^ID:\s*(.+)$/m)?.[1]?.trim() ?? null;
-    const fromRaw    = raw.match(/^FROM:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const dateRaw    = raw.match(/^DATE:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const subject    = raw.match(/^SUBJECT:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const snippet    = raw.match(/^SNIPPET:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const bodyLine   = raw.match(/^BODY:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const attLine    = raw.match(/^ATTACHMENTS:\s*(.+)$/m)?.[1]?.trim() ?? '';
-    const meetingUrl = raw.match(/^MEETING_LINK:\s*(.+)$/m)?.[1]?.trim() ?? null;
-    const fullText   = `${subject} ${snippet} ${bodyLine}`;
+    const raw      = emailSnippets[i];
+    const fromRaw  = raw.match(/^FROM:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const dateRaw  = raw.match(/^DATE:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const subject  = raw.match(/^SUBJECT:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const snippet  = raw.match(/^SNIPPET:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    const fullText = `${subject} ${snippet}`;
 
     if (!isActionable(fullText)) continue;
     if (isStaleImmediateRequest(fullText, dateRaw)) continue;
@@ -425,8 +407,8 @@ export function parseEmailsWithRules(
     const risk: 'high' | 'medium' | 'low' =
       daysUntil <= 7 ? 'high' : daysUntil <= 30 ? 'medium' : 'low';
 
-    // Build title — use body when subject is generic
-    const title = buildTitle(subject, bodyLine || snippet, sender);
+    // Build title — fall back to snippet when subject is generic
+    const title = buildTitle(subject, snippet, sender);
 
     // Skip if very similar to an existing active obligation
     const titleNorm = title.toLowerCase().trim();
@@ -448,14 +430,6 @@ export function parseEmailsWithRules(
       default:                executionPath = `Handle: ${subject || `email from ${sender}`}`;
     }
 
-    // Parse attachments from summary line
-    const parsedAttachments = attLine
-      ? attLine.split(',').map(a => {
-          const m = a.trim().match(/^(.+?)\s*\((\d+)KB\)$/);
-          return m ? { name: m[1], mimeType: 'application/octet-stream', size: parseInt(m[2]) * 1024 } : null;
-        }).filter(Boolean) as { name: string; mimeType: string; size: number }[]
-      : null;
-
     results.push({
       _id:          `rule_${i}_${Date.now()}`,
       emoji,
@@ -469,12 +443,6 @@ export function parseEmailsWithRules(
       notes:        `source: email from ${sender}`,
       replyTo:      type === 'reply_needed' ? replyEmail : null,
       replySubject: type === 'reply_needed' ? `Re: ${subject}` : null,
-      meetingLink:  meetingUrl ?? null,
-      keyMessage:   bodyLine ? bodyLine.slice(0, 120) : null,
-      emailId:      emailId,
-      provider:     'google',
-      emailBody:    bodyLine || null,
-      attachments:  parsedAttachments?.length ? parsedAttachments : null,
     });
   }
 
@@ -531,8 +499,8 @@ EXISTING OBLIGATIONS (do NOT re-extract these): ${existingTitles || 'none'}
 EMAIL SNIPPETS (source: ${accountLabel || 'inbox'}):
 ${emailSnippets.map((s, i) => `--- Email ${i + 1} ---\n${s}`).join('\n\n')}
 
-TITLE RULE: If the SUBJECT is generic ("Urgent", "Hi", "FWD", "Follow up", no-subject, etc.),
-use the BODY field to craft a specific 5-10 word title describing the required action.
+TITLE RULE: If the SUBJECT is generic ("Urgent", "Hi", "FWD", "Follow up", etc.),
+use the SNIPPET to craft a specific 5-10 word title describing the required action.
 
 Return ONLY a JSON array of new obligations (skip already listed ones).
 If an email is informational/confirmation with no pending user action, DO NOT include it.
@@ -550,9 +518,7 @@ Each item must follow this schema exactly:
   "executionPath": "one sentence on how to handle this",
   "notes": "source: email from [sender name]",
   "replyTo": "email address if type is reply_needed -- else null",
-  "replySubject": "Re: original subject if type is reply_needed -- else null",
-  "meetingLink": "Zoom/Meet/Teams URL from MEETING_LINK field -- else null",
-  "keyMessage": "1-2 sentence plain-English summary of what this email wants the user to do -- else null"
+  "replySubject": "Re: original subject if type is reply_needed -- else null"
 }
 
 If nothing actionable found, return: []`;
@@ -567,7 +533,7 @@ If nothing actionable found, return: []`;
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify({
-        model:      'claude-sonnet-4-20250514',
+        model:      'claude-3-5-sonnet-20241022',
         max_tokens: 1500,
         messages:   [{ role: 'user', content: prompt }],
       }),
@@ -636,7 +602,7 @@ If no obligations found, return: []`;
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify({
-        model:      'claude-sonnet-4-20250514',
+        model:      'claude-3-5-sonnet-20241022',
         max_tokens: 1000,
         messages:   [{ role: 'user', content: prompt }],
       }),
