@@ -321,8 +321,24 @@ export async function parseEmailsForObligations(
     .join(', ');
 
   const prompt = `You are an AI assistant analyzing email snippets for a Dubai professional.
-Extract ONLY actionable obligations: deadlines, renewals, payments due, appointments, expiries,
-documents needing signature, and emails requiring a reply.
+Your job is to extract ONLY emails that require the user to take an action — not informational notifications.
+
+━━━ SKIP these — they are informational, no user action needed ━━━
+• Transaction confirmations: "Your SIP of ₹X has been processed", "Payment successful", "Order confirmed"
+• Bank/financial statements: "Weekly combined statement", "Monthly account summary", "Portfolio update"
+• Automated receipts: "Thank you for your payment", "Receipt for your purchase", "Booking confirmed"
+• Security/system notifications: "New sign-in detected", "Password changed", "2FA enabled"
+• Marketing/newsletters: welcome emails, product updates, promotional offers
+• Status updates where the action is already DONE: "Your request has been approved", "Your order has been dispatched"
+• Mutual fund / investment confirmations: unit allotments, NAV updates, SIP execution reports
+
+━━━ INCLUDE these — the user must do something ━━━
+• Payments that are DUE (not already paid): invoice due, bill due, EMI due, outstanding balance
+• Documents needing signature: contract, agreement, form to fill/sign
+• Appointments needing confirmation or attendance: medical, government, meeting requiring RSVP
+• Emails explicitly asking for a reply, response, feedback, or approval
+• Renewals expiring soon: visa, Emirates ID, insurance, vehicle registration, subscription
+• Tasks or follow-ups where the sender is waiting on the user
 
 EXISTING OBLIGATIONS (do NOT re-extract these): ${existingTitles || 'none'}
 
@@ -330,6 +346,7 @@ EMAIL SNIPPETS (source: ${accountLabel || 'inbox'}):
 ${emailSnippets.map((s, i) => `--- Email ${i + 1} ---\n${s}`).join('\n\n')}
 
 Return ONLY a JSON array of new obligations found (not already in the existing list).
+If an email is informational/confirmation with no pending user action, DO NOT include it.
 
 Each item must follow this schema exactly:
 {
