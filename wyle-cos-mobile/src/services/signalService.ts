@@ -720,6 +720,19 @@ export async function runMultiAccountSignalScan(
     })
   );
 
+  // ── Fetch WhatsApp obligations ───────────────────────────────────────────
+  try {
+    const { fetchWhatsAppObligations } = await import('./whatsappService');
+    const waObligations = await fetchWhatsAppObligations();
+    if (waObligations.length > 0) {
+      allObligations.push(...waObligations);
+      accountsScanned.push({ email: 'WhatsApp', provider: 'whatsapp' as any });
+    }
+  } catch (e: any) {
+    // WhatsApp backend not reachable — silently skip, don't block email scan
+    console.warn('[Signal] WhatsApp fetch skipped:', e?.message);
+  }
+
   // ── Build summary ────────────────────────────────────────────────────────
   const totalAccounts = accountsScanned.length;
   const totalNew      = allObligations.length;
