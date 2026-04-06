@@ -407,6 +407,16 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
     setWaQR(null);
     setWaQRLoading(true);
 
+    // Check if already connected first
+    const status = await getWhatsAppStatus();
+    if (status?.connected) {
+      setWaConnected(true);
+      setWaPhone(status.phone ?? '');
+      setShowWAModal(false);
+      setWaQRLoading(false);
+      return;
+    }
+
     // Fetch QR — retry up to 5 times (backend may need a moment)
     let qr: string | null = null;
     for (let i = 0; i < 5 && !qr; i++) {
