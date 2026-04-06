@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Dimensions, Animated, StatusBar, ActivityIndicator, Platform, Alert, Modal,
+  Dimensions, Animated, StatusBar, ActivityIndicator, Platform, Alert, Modal, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -23,6 +23,7 @@ import {
   disconnectOutlookAccount, getAllOutlookAccounts,
 } from '../../services/outlookAuthService';
 import { runFullSignalScan } from '../../services/signalService';
+import { getWhatsAppStatus, getWhatsAppQR } from '../../services/whatsappService';
 
 const { width } = Dimensions.get('window');
 
@@ -251,6 +252,13 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
   const [confirmRemoveType,    setConfirmRemoveType]    = useState<'google' | 'outlook'>('google');
   const [removing,             setRemoving]             = useState(false);
 
+  // WhatsApp state
+  const [waConnected,   setWaConnected]   = useState(false);
+  const [waPhone,       setWaPhone]       = useState<string>('');
+  const [showWAModal,   setShowWAModal]   = useState(false);
+  const [waQR,          setWaQR]          = useState<string | null>(null);
+  const [waQRLoading,   setWaQRLoading]   = useState(false);
+
   const fadeIn  = useRef(new Animated.Value(0)).current;
   const slideUp = useRef(new Animated.Value(20)).current;
 
@@ -283,6 +291,14 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
     // Load all Outlook / Microsoft accounts
     const msAccounts = getAllOutlookAccounts();
     if (msAccounts.length > 0) setOAccounts(msAccounts);
+
+    // Check WhatsApp connection status
+    getWhatsAppStatus().then(status => {
+      if (status?.connected) {
+        setWaConnected(true);
+        setWaPhone(status.phone ?? '');
+      }
+    });
 
     // Entrance animation
     Animated.parallel([
@@ -383,6 +399,37 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
     const result = await addMsAccount();
     if (result.success === 'redirect') return;
     if (result.success === true) addOAcc(result.email);
+  };
+
+  // ── WhatsApp connect ────────────────────────────────────────────────────────
+  const handleConnectWhatsApp = async () => {
+    setShowWAModal(true);
+    setWaQR(null);
+    setWaQRLoading(true);
+
+    // Fetch QR — retry up to 5 times (backend may need a moment)
+    let qr: string | null = null;
+    for (let i = 0; i < 5 && !qr; i++) {
+      await new Promise(r => setTimeout(r, i === 0 ? 0 : 2000));
+      qr = await getWhatsAppQR();
+    }
+    setWaQR(qr);
+    setWaQRLoading(false);
+
+    // Poll status every 3 s — close modal when phone links
+    const poll = setInterval(async () => {
+      const status = await getWhatsAppStatus();
+      if (status?.connected) {
+        clearInterval(poll);
+        setWaConnected(true);
+        setWaPhone(status.phone ?? '');
+        setShowWAModal(false);
+        setWaQR(null);
+      }
+    }, 3000);
+
+    // Stop polling after 5 minutes regardless
+    setTimeout(() => clearInterval(poll), 5 * 60 * 1000);
   };
 
   // ── Sign out ────────────────────────────────────────────────────────────────
@@ -623,6 +670,87 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
               )}
             </View>
           </Animated.View>
+
+          {/* ── WhatsApp ────────────────────────────────────────────────────── */}
+          <Animated.View style={{ opacity: fadeIn }}>
+            <Text style={s.sectionLabel}>WHATSAPP</Text>
+            <View style={{ marginBottom: 22 }}>
+              {waConnected ? (
+                <View style={s.accountItem}>
+                  <View style={[s.accountIconWrap, { backgroundColor: '#25D36618', marginRight: 10, width: 32, height: 32, borderRadius: 8 }]}>
+                    <Text style={{ fontSize: 16 }}>💬</Text>
+                  </View>
+                  <Text style={s.accountEmail} numberOfLines={1}>{waPhone || 'WhatsApp Connected'}</Text>
+                  <View style={[s.accountPrimaryBadge, { backgroundColor: '#25D36618' }]}>
+                    <Text style={[s.accountPrimaryText, { color: '#25D366' }]}>Connected</Text>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={[s.accountRow, { backgroundColor: C.surface, borderRadius: 18, borderWidth: 1, borderColor: C.border }]}
+                  onPress={handleConnectWhatsApp}
+                  activeOpacity={0.75}
+                >
+                  <View style={[s.accountIconWrap, { backgroundColor: '#25D36618' }]}>
+                    <Text style={s.accountIconText}>💬</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.accountRowLabel}>Connect WhatsApp</Text>
+                    <Text style={s.accountRowSub}>Detect obligations from your messages</Text>
+                  </View>
+                  <View style={[s.connStatusDot, { backgroundColor: C.textTer }]} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </Animated.View>
+
+          {/* ── WhatsApp QR Modal ───────────────────────────────────────────── */}
+          <Modal
+            visible={showWAModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowWAModal(false)}
+          >
+            <View style={s.waModalOverlay}>
+              <View style={s.waModalCard}>
+                {/* Header */}
+                <View style={s.waModalHeader}>
+                  <Text style={s.waModalTitle}>Link WhatsApp</Text>
+                  <TouchableOpacity onPress={() => setShowWAModal(false)} style={s.waModalClose}>
+                    <Text style={s.waModalCloseText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Instructions */}
+                <Text style={s.waModalInstructions}>
+                  Open WhatsApp → Linked Devices → Link a Device → Scan this QR
+                </Text>
+
+                {/* QR area */}
+                <View style={s.waQRWrap}>
+                  {waQRLoading ? (
+                    <ActivityIndicator size="large" color="#25D366" style={{ margin: 40 }} />
+                  ) : waQR ? (
+                    <Image
+                      source={{ uri: waQR }}
+                      style={s.waQRImage}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View style={s.waQRError}>
+                      <Text style={s.waQRErrorText}>⚠️ QR not available{'\n'}Backend may still be starting</Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Waiting indicator */}
+                <View style={s.waWaitingRow}>
+                  <ActivityIndicator size="small" color="#25D366" />
+                  <Text style={s.waWaitingText}>Waiting for you to scan…</Text>
+                </View>
+              </View>
+            </View>
+          </Modal>
 
           {/* ── Account ────────────────────────────────────────────────────── */}
           <Animated.View style={{ opacity: fadeIn }}>
@@ -917,6 +1045,36 @@ const s = StyleSheet.create({
     color: C.textTer, fontSize: 11, textAlign: 'center',
     marginBottom: 8,
   },
+
+  // ── WhatsApp QR Modal
+  waModalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.75)',
+    alignItems: 'center', justifyContent: 'center', padding: 24,
+  },
+  waModalCard: {
+    backgroundColor: '#1A1A1A', borderRadius: 24, width: '100%',
+    maxWidth: 360, padding: 24, borderWidth: 1, borderColor: '#2A2A2A',
+  },
+  waModalHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12,
+  },
+  waModalTitle:     { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
+  waModalClose:     { padding: 4 },
+  waModalCloseText: { color: '#9A9A9A', fontSize: 18 },
+  waModalInstructions: {
+    color: '#9A9A9A', fontSize: 13, lineHeight: 18, marginBottom: 20, textAlign: 'center',
+  },
+  waQRWrap: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, alignItems: 'center',
+    justifyContent: 'center', padding: 12, minHeight: 240, marginBottom: 20,
+  },
+  waQRImage: { width: 220, height: 220 },
+  waQRError: { alignItems: 'center', padding: 20 },
+  waQRErrorText: { color: '#9A9A9A', fontSize: 13, textAlign: 'center', lineHeight: 20 },
+  waWaitingRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
+  waWaitingText: { color: '#25D366', fontSize: 13, fontWeight: '600' },
 
   // ── Tab bar (identical to HomeScreen)
   tabBar: {
