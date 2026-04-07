@@ -1,10 +1,11 @@
 // src/services/aiService.ts
-// Unified AI caller: Claude → Groq → Gemini → Together AI
+// Unified AI caller: Claude → Groq → Gemini → Together AI → OpenRouter
 
 const ANTHROPIC_API_KEY  = (process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY  ?? '').trim();
 const GROQ_API_KEY       = (process.env.EXPO_PUBLIC_GROQ_API_KEY       ?? '').trim();
 const GEMINI_API_KEY     = (process.env.EXPO_PUBLIC_GEMINI_API_KEY      ?? '').trim();
 const TOGETHER_API_KEY   = (process.env.EXPO_PUBLIC_TOGETHER_API_KEY    ?? '').trim();
+const OPENROUTER_API_KEY = (process.env.EXPO_PUBLIC_OPENROUTER_API_KEY  ?? '').trim();
 
 type Role = 'user' | 'assistant';
 
@@ -80,6 +81,23 @@ async function callTogether(req: AIRequest): Promise<AIResponse> {
   return { text: data.choices?.[0]?.message?.content ?? '', stopReason: 'end_turn', toolUse: null };
 }
 
+// ── OpenRouter (free models, no expiry) ───────────────────────────────────────
+async function callOpenRouter(req: AIRequest): Promise<AIResponse> {
+  if (!OPENROUTER_API_KEY) throw new Error('No OpenRouter API key configured');
+  const msgs: AIMessage[] = req.messages ?? (req.prompt ? [{ role: 'user', content: req.prompt }] : []);
+  const orMessages: any[] = [];
+  if (req.system) orMessages.push({ role: 'system', content: req.system });
+  orMessages.push(...msgs.map(m => ({ role: m.role, content: m.content })));
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENROUTER_API_KEY}` },
+    body: JSON.stringify({ model: 'meta-llama/llama-3.1-8b-instruct:free', messages: orMessages, max_tokens: req.maxTokens ?? 1000 }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message ?? 'OpenRouter API error');
+  return { text: data.choices?.[0]?.message?.content ?? '', stopReason: 'end_turn', toolUse: null };
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 export async function callAI(req: AIRequest): Promise<AIResponse> {
   const msgs: AIMessage[] = req.messages ?? (req.prompt ? [{ role: 'user', content: req.prompt }] : []);
@@ -120,8 +138,13 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
   // 4. Together AI
   try {
     return await callTogether(req);
+  } catch (e: any) { console.warn('[AIService] Together AI failed:', e?.message, '— falling back to OpenRouter'); }
+
+  // 5. OpenRouter (free tier, no expiry)
+  try {
+    return await callOpenRouter(req);
   } catch (e: any) {
-    console.error('[AIService] Together AI also failed:', e?.message);
+    console.error('[AIService] OpenRouter also failed:', e?.message);
     return { text: '', stopReason: 'error', toolUse: null };
   }
 }
