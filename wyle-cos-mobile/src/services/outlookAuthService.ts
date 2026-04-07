@@ -308,9 +308,21 @@ export async function getAccessTokenForOutlookEmail(email: string): Promise<stri
       }).toString(),
     });
     const data = await res.json();
-    if (!data.access_token) return null;
+
+    if (!res.ok || !data.access_token) {
+      // Refresh token is invalid or expired — clear stored credentials so
+      // the UI shows the account as disconnected and prompts re-auth.
+      console.warn('[OutlookAuth] Refresh token expired/invalid for', email, '— clearing credentials');
+      remove(keys.ACCESS_TOKEN);
+      remove(keys.REFRESH_TOKEN);
+      remove(keys.TOKEN_EXPIRY);
+      const accounts = getAccountsList();
+      saveAccountsList(accounts.filter(e => e !== email));
+      return null;
+    }
 
     store(keys.ACCESS_TOKEN, data.access_token);
+    if (data.refresh_token) store(keys.REFRESH_TOKEN, data.refresh_token);
     store(keys.TOKEN_EXPIRY, (Date.now() + (data.expires_in ?? 3600) * 1000).toString());
     return data.access_token;
   } catch { return null; }
