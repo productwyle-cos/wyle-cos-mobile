@@ -428,7 +428,7 @@ function TabBar({ active, onTab }: { active: string; onTab: (s: any) => void }) 
 // Obligation Card
 // ─────────────────────────────────────────────────────────────────────────────
 function ObligationCard({ item, onPress, onResolve, onReply }: any) {
-  const riskColor   = RISK_COLORS[item.risk as Risk];
+  const riskColor   = RISK_COLORS[(item.risk ?? 'medium') as Risk] ?? RISK_COLORS['medium'];
   const isReplyType = item.type === 'reply_needed';
   const scaleAnim   = useRef(new Animated.Value(1)).current;
   const handlePress = () => {
@@ -452,7 +452,7 @@ function ObligationCard({ item, onPress, onResolve, onReply }: any) {
           {item.notes && <Text style={styles.cardNotes} numberOfLines={1}>{item.notes}</Text>}
           <View style={styles.cardMeta}>
             <View style={[styles.riskPill, { backgroundColor: `${riskColor}18`, borderColor: `${riskColor}38` }]}>
-              <Text style={[styles.riskPillText, { color: riskColor }]}>{item.risk.toUpperCase()}</Text>
+              <Text style={[styles.riskPillText, { color: riskColor }]}>{(item.risk ?? 'medium').toUpperCase()}</Text>
             </View>
             <Text style={[styles.daysText, { color: riskColor }]}>{getDaysLabel(item.daysUntil)}</Text>
             {item.amount && <Text style={styles.amount}>AED {item.amount.toLocaleString()}</Text>}
