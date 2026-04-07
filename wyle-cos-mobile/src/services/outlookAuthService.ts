@@ -307,6 +307,17 @@ export async function getAccessTokenForOutlookEmail(email: string): Promise<stri
         scope:         MS_SCOPES.join(' '),
       }).toString(),
     });
+
+    // 400 = refresh token expired or revoked — clear stored credentials
+    if (res.status === 400) {
+      console.warn(`[OutlookAuth] Refresh token invalid for ${email} — clearing account`);
+      remove(keys.ACCESS_TOKEN);
+      remove(keys.REFRESH_TOKEN);
+      remove(keys.TOKEN_EXPIRY);
+      saveAccountsList(getAccountsList().filter(e => e !== email));
+      return null;
+    }
+
     const data = await res.json();
     if (!data.access_token) return null;
 

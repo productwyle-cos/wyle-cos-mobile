@@ -6,7 +6,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
   Animated, Modal, TextInput, KeyboardAvoidingView,
-  Platform, StatusBar, ActivityIndicator, Dimensions,
+  Platform, StatusBar, ActivityIndicator, Dimensions, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -482,81 +482,138 @@ function DetailModal({ item, visible, onClose, onResolve, onReply }: any) {
   if (!item) return null;
   const riskColor   = RISK_COLORS[item.risk as Risk];
   const isReplyType = item.type === 'reply_needed';
+  const hasMeeting  = !!item.meetingLink;
+  const hasBody     = !!item.emailBody;
+  const hasAttachments = item.attachments && item.attachments.length > 0;
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={modal.overlay}>
         <TouchableOpacity style={modal.backdrop} onPress={onClose} />
         <View style={modal.sheet}>
           <View style={modal.handle} />
-          <View style={modal.header}>
-            <View style={[modal.icon, { backgroundColor: `${riskColor}18` }]}>
-              <Text style={{ fontSize: 32 }}>{item.emoji}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={modal.title}>{item.title}</Text>
-              <View style={[modal.riskBadge, { backgroundColor: `${riskColor}18` }]}>
-                <Text style={[modal.riskText, { color: riskColor }]}>
-                  {item.risk === 'high' ? '🔴' : item.risk === 'medium' ? '🟡' : '🟢'} {item.risk.toUpperCase()} RISK
-                </Text>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Header */}
+            <View style={modal.header}>
+              <View style={[modal.icon, { backgroundColor: `${riskColor}18` }]}>
+                <Text style={{ fontSize: 32 }}>{item.emoji}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={modal.title}>{item.title}</Text>
+                <View style={[modal.riskBadge, { backgroundColor: `${riskColor}18` }]}>
+                  <Text style={[modal.riskText, { color: riskColor }]}>
+                    {item.risk === 'high' ? '🔴' : item.risk === 'medium' ? '🟡' : '🟢'} {item.risk.toUpperCase()} RISK
+                  </Text>
+                </View>
               </View>
             </View>
-          </View>
-          <View style={modal.infoGrid}>
-            <View style={modal.infoItem}>
-              <Text style={modal.infoLabel}>Due in</Text>
-              <Text style={[modal.infoValue, { color: riskColor }]}>{getDaysLabel(item.daysUntil)}</Text>
-            </View>
-            {item.amount && (
+
+            {/* Info grid */}
+            <View style={modal.infoGrid}>
               <View style={modal.infoItem}>
-                <Text style={modal.infoLabel}>Amount</Text>
-                <Text style={modal.infoValue}>AED {item.amount.toLocaleString()}</Text>
+                <Text style={modal.infoLabel}>Due in</Text>
+                <Text style={[modal.infoValue, { color: riskColor }]}>{getDaysLabel(item.daysUntil)}</Text>
+              </View>
+              {item.amount && (
+                <View style={modal.infoItem}>
+                  <Text style={modal.infoLabel}>Amount</Text>
+                  <Text style={modal.infoValue}>AED {item.amount.toLocaleString()}</Text>
+                </View>
+              )}
+              {isReplyType && item.replyTo && (
+                <View style={modal.infoItem}>
+                  <Text style={modal.infoLabel}>Reply to</Text>
+                  <Text style={[modal.infoValue, { fontSize: 11 }]} numberOfLines={1}>{item.replyTo}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Key message */}
+            {item.keyMessage && (
+              <View style={modal.sectionBlock}>
+                <Text style={modal.sectionLabel}>KEY MESSAGE</Text>
+                <Text style={modal.sectionText}>{item.keyMessage}</Text>
               </View>
             )}
-            {isReplyType && item.replyTo && (
-              <View style={modal.infoItem}>
-                <Text style={modal.infoLabel}>Reply to</Text>
-                <Text style={[modal.infoValue, { fontSize: 11 }]} numberOfLines={1}>{item.replyTo}</Text>
-              </View>
-            )}
-          </View>
-          {item.executionPath && (
-            <View style={modal.executionBlock}>
-              <Text style={modal.executionLabel}>HOW TO RESOLVE</Text>
-              <Text style={modal.executionText}>{item.executionPath}</Text>
-            </View>
-          )}
-          <View style={modal.actions}>
-            {/* Reply button — only for reply_needed type */}
-            {isReplyType && !!onReply && (
+
+            {/* Meeting link button */}
+            {hasMeeting && (
               <TouchableOpacity
-                style={[modal.primaryBtn, { marginBottom: 10 }]}
-                onPress={() => { onClose(); onReply(item); }}
+                style={modal.meetingBtn}
+                onPress={() => Linking.openURL(item.meetingLink)}
+              >
+                <Text style={modal.meetingBtnText}>📹  Join Meeting</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Attachments */}
+            {hasAttachments && (
+              <View style={modal.sectionBlock}>
+                <Text style={modal.sectionLabel}>📎 ATTACHMENTS</Text>
+                {item.attachments.map((att: any, idx: number) => (
+                  <View key={idx} style={modal.attachmentRow}>
+                    <Text style={modal.attachmentName} numberOfLines={1}>{att.name}</Text>
+                    <Text style={modal.attachmentSize}>{formatBytes(att.size)}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* How to resolve */}
+            {item.executionPath && !hasMeeting && (
+              <View style={modal.executionBlock}>
+                <Text style={modal.executionLabel}>HOW TO RESOLVE</Text>
+                <Text style={modal.executionText}>{item.executionPath}</Text>
+              </View>
+            )}
+
+            {/* Email body */}
+            {hasBody && (
+              <View style={modal.sectionBlock}>
+                <Text style={modal.sectionLabel}>EMAIL BODY</Text>
+                <Text style={modal.bodyText}>{item.emailBody}</Text>
+              </View>
+            )}
+
+            {/* Actions */}
+            <View style={modal.actions}>
+              {isReplyType && !!onReply && (
+                <TouchableOpacity
+                  style={[modal.primaryBtn, { marginBottom: 10 }]}
+                  onPress={() => { onClose(); onReply(item); }}
+                >
+                  <LinearGradient
+                    colors={['#0078D4', C.verdigris]}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                    style={modal.primaryBtnGrad}
+                  >
+                    <Text style={modal.primaryBtnText}>✉️  Compose Reply</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={modal.primaryBtn}
+                onPress={() => { onResolve(item); onClose(); }}
               >
                 <LinearGradient
-                  colors={['#0078D4', C.verdigris]}
+                  colors={[C.verdigris, C.chartreuseB]}
                   start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                   style={modal.primaryBtnGrad}
                 >
-                  <Text style={modal.primaryBtnText}>✉️  Compose Reply</Text>
+                  <Text style={modal.primaryBtnText}>Mark as resolved</Text>
                 </LinearGradient>
               </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={modal.primaryBtn}
-              onPress={() => { onResolve(item); onClose(); }}
-            >
-              <LinearGradient
-                colors={[C.verdigris, C.chartreuseB]}
-                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={modal.primaryBtnGrad}
-              >
-                <Text style={modal.primaryBtnText}>Mark as resolved</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-            <TouchableOpacity style={modal.secondaryBtn} onPress={onClose}>
-              <Text style={modal.secondaryBtnText}>Remind me later</Text>
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity style={modal.secondaryBtn} onPress={onClose}>
+                <Text style={modal.secondaryBtnText}>Remind me later</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -2479,11 +2536,30 @@ const modal = StyleSheet.create({
   infoValue:      { color: C.white, fontSize: 20, fontWeight: '700' },
   executionBlock: {
     backgroundColor: C.surfaceEl, borderRadius: 14, padding: 14,
-    marginBottom: 20, borderWidth: 1, borderColor: C.border,
+    marginBottom: 14, borderWidth: 1, borderColor: C.border,
   },
   executionLabel: { color: C.textTer, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 6 },
   executionText:  { color: C.textSec, fontSize: 14, lineHeight: 20 },
-  actions:        { gap: 10 },
+  sectionBlock: {
+    backgroundColor: C.surfaceEl, borderRadius: 14, padding: 14,
+    marginBottom: 14, borderWidth: 1, borderColor: C.border,
+  },
+  sectionLabel:   { color: C.textTer, fontSize: 10, fontWeight: '700', letterSpacing: 1.5, marginBottom: 6 },
+  sectionText:    { color: C.white, fontSize: 14, lineHeight: 22 },
+  bodyText:       { color: C.textSec, fontSize: 13, lineHeight: 20, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+  meetingBtn: {
+    backgroundColor: '#1A6B5A', borderRadius: 14, padding: 16,
+    alignItems: 'center', marginBottom: 14,
+    borderWidth: 1, borderColor: C.verdigris,
+  },
+  meetingBtnText: { color: C.white, fontSize: 16, fontWeight: '700' },
+  attachmentRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  attachmentName: { color: C.white, fontSize: 13, flex: 1, marginRight: 8 },
+  attachmentSize: { color: C.textTer, fontSize: 12 },
+  actions:        { gap: 10, marginTop: 6 },
   primaryBtn:     { borderRadius: 999, overflow: 'hidden' },
   primaryBtnGrad: { paddingVertical: 16, alignItems: 'center', borderRadius: 999 },
   primaryBtnText: { color: C.bg, fontSize: 16, fontWeight: '800' },

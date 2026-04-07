@@ -462,10 +462,12 @@ export async function getAccessTokenForEmail(email: string): Promise<string | nu
   const expiry = await getItem(keys.TOKEN_EXPIRY);
   if (!token) return null;
   if (expiry && Date.now() < parseInt(expiry) - 60_000) return token;
-  // refresh
+  // Token expired — attempt refresh
   const refresh = await getItem(keys.REFRESH_TOKEN);
   const clientId = getClientId();
-  if (!refresh || !clientId) return null;
+  // If no refresh token or client ID, return existing token optimistically
+  // (on web, Google often skips refresh_token on repeat sign-ins)
+  if (!refresh || !clientId) return token;
   try {
     const refreshBody: Record<string, string> = { client_id: clientId, refresh_token: refresh, grant_type: 'refresh_token' };
     const clientSecret = getClientSecret();

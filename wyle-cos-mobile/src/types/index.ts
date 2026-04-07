@@ -86,6 +86,16 @@ export interface UIObligation {
   // Email reply fields — populated when type === 'reply_needed'
   replyTo?: string | null;
   replySubject?: string | null;
+  // Meeting link — populated when email contains a Zoom/Meet/Teams URL
+  meetingLink?: string | null;
+  // Key message — 1-2 sentence plain-English summary of what the email wants
+  keyMessage?: string | null;
+  // Email body display fields
+  emailId?: string | null;        // Gmail/Outlook message ID for on-demand body fetch
+  provider?: 'google' | 'outlook' | null;
+  accountEmail?: string | null;   // which account this email came from
+  emailBody?: string | null;      // cleaned plain-text body stored at scan time
+  attachments?: { name: string; mimeType: string; size: number }[] | null;
 }
 
 // Helper — converts backend Obligation to UIObligation when API is ready
