@@ -98,5 +98,10 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
     console.warn('[AIService] Claude network error — falling back to Groq');
   }
 
-  return callGroq(req);
+  try {
+    return await callGroq(req);
+  } catch (e: any) {
+    console.error('[AIService] Groq also failed:', e?.message);
+    return { text: '', stopReason: 'error', toolUse: null };
+  }
 }

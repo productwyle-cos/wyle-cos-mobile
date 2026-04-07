@@ -83,6 +83,8 @@ export interface UIObligation {
   status: 'active' | 'completed';
   executionPath: string;
   notes: string | null;
+  // Source — where this obligation came from
+  source?: 'whatsapp' | 'email' | 'voice' | 'manual';
   // Email reply fields — populated when type === 'reply_needed'
   replyTo?: string | null;
   replySubject?: string | null;
