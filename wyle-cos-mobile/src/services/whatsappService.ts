@@ -86,21 +86,23 @@ function mapIcon(type: WAObligation['type']): string {
 
 // ── Convert backend WAObligation → UIObligation ───────────────────────────────
 function toUIobligation(wa: WAObligation): UIObligation {
+  const senderLabel = wa.senderName || wa.senderPhone || 'WhatsApp';
   return {
-    id:           wa.id,
-    title:        wa.title,
-    category:     'WhatsApp',
-    urgency:      mapRisk(wa.risk),
-    daysUntil:    wa.daysUntil,
-    icon:         mapIcon(wa.type),
-    status:       wa.status === 'pending' ? 'active' : 'completed',
-    source:       'whatsapp',
-    provider:     'whatsapp',
-    accountEmail: wa.senderPhone,
-    keyMessage:   wa.originalMessage,
-    meetingLink:  wa.meetingTime
+    _id:           wa.id,
+    emoji:         mapIcon(wa.type),
+    title:         wa.title,
+    type:          wa.type,
+    daysUntil:     wa.daysUntil,
+    risk:          wa.risk,
+    amount:        null,
+    status:        wa.status === 'pending' ? 'active' : 'completed',
+    executionPath: wa.suggestedReply ?? '',
+    notes:         wa.originalMessage ? `${senderLabel}: ${wa.originalMessage}` : null,
+    source:        'whatsapp',
+    replyTo:       wa.senderPhone ?? null,
+    meetingLink:   wa.meetingTime
       ? `Meeting at ${new Date(wa.meetingTime).toLocaleString()}`
-      : undefined,
+      : null,
   };
 }
 
