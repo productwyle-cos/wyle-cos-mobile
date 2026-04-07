@@ -977,16 +977,6 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
     setConflictWarnings(new Map());
     setOverloadWarnings({});
 
-    // ── No API key → skip straight to rule-based ─────────────────────────
-    if (!ANTHROPIC_API_KEY) {
-      try {
-        await applyParsedResponse(parseVoiceWithRules(text));
-      } catch {
-        setVoiceState('error');
-      }
-      return;
-    }
-
     try {
       const { text: raw } = await callAI({
         system:    buildBrainDumpSystem(),
@@ -1449,7 +1439,6 @@ function autoDraftWithRules(ob: any): string {
 
 /** Auto-draft a professional first reply via Claude; falls back to rules */
 async function autoDraftReply(ob: any): Promise<string> {
-  if (!ANTHROPIC_API_KEY) return autoDraftWithRules(ob);
   try {
     const context =
       `Subject: ${ob.replySubject ?? ob.title ?? 'N/A'}\n` +
