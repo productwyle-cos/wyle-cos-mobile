@@ -1,8 +1,8 @@
 // src/services/aiService.ts
-// Unified AI caller: Claude primary → Gemini fallback on failure
+// Unified AI caller: Claude primary → Groq fallback on failure
 
 const ANTHROPIC_API_KEY = (process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '').trim();
-const GEMINI_API_KEY    = (process.env.EXPO_PUBLIC_GEMINI_API_KEY    ?? '').trim();
+const GROQ_API_KEY      = (process.env.EXPO_PUBLIC_GROQ_API_KEY      ?? '').trim();
 
 type Role = 'user' | 'assistant';
 
@@ -27,35 +27,37 @@ export interface AIResponse {
   toolUse?:    { name: string; input: any } | null;
 }
 
-// ── Gemini fallback ───────────────────────────────────────────────────────────
-async function callGemini(req: AIRequest): Promise<AIResponse> {
-  if (!GEMINI_API_KEY) throw new Error('No Gemini API key configured');
+// ── Groq fallback (OpenAI-compatible API, free tier) ─────────────────────────
+async function callGroq(req: AIRequest): Promise<AIResponse> {
+  if (!GROQ_API_KEY) throw new Error('No Groq API key configured');
 
   const msgs: AIMessage[] = req.messages ?? (req.prompt ? [{ role: 'user', content: req.prompt }] : []);
 
-  const contents = msgs.map(m => ({
-    role:  m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
+  const groqMessages: any[] = [];
+  if (req.system) {
+    groqMessages.push({ role: 'system', content: req.system });
+  }
+  groqMessages.push(...msgs.map(m => ({ role: m.role, content: m.content })));
 
-  const body: any = {
-    contents,
-    generationConfig: { maxOutputTokens: req.maxTokens ?? 1000 },
+  const body = {
+    model:      'llama-3.3-70b-versatile',
+    messages:   groqMessages,
+    max_tokens: req.maxTokens ?? 1000,
   };
 
-  if (req.system) {
-    body.systemInstruction = { parts: [{ text: req.system }] };
-  }
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
-  );
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method:  'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
 
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message ?? 'Gemini API error');
+  if (!res.ok) throw new Error(data.error?.message ?? 'Groq API error');
 
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  const text = data.choices?.[0]?.message?.content ?? '';
   return { text, stopReason: 'end_turn', toolUse: null };
 }
 
@@ -75,9 +77,9 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Content-Type':                       'application/json',
-        'x-api-key':                          ANTHROPIC_API_KEY,
-        'anthropic-version':                  '2023-06-01',
+        'Content-Type':                            'application/json',
+        'x-api-key':                               ANTHROPIC_API_KEY,
+        'anthropic-version':                       '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify(claudeBody),
@@ -91,10 +93,10 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
       return { text, stopReason: data.stop_reason, toolUse };
     }
 
-    console.warn(`[AIService] Claude failed (${res.status}: ${data.error?.message}) — falling back to Gemini`);
+    console.warn(`[AIService] Claude failed (${res.status}: ${data.error?.message}) — falling back to Groq`);
   } catch (e) {
-    console.warn('[AIService] Claude network error — falling back to Gemini');
+    console.warn('[AIService] Claude network error — falling back to Groq');
   }
 
-  return callGemini(req);
+  return callGroq(req);
 }
