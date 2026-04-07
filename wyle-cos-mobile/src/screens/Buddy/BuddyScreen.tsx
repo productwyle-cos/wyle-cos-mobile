@@ -21,6 +21,7 @@ import type { NavProp } from '../../../app/index';
 import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
 import { UIObligation } from '../../types';
+import { callAI } from '../../services/aiService';
 
 const { width } = Dimensions.get('window');
 
@@ -42,8 +43,7 @@ const C = {
   border:     '#2A2A2A',
 };
 
-const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
-const OPENAI_API_KEY    = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY ?? '';
 
 function buildSystemPrompt(obligations: UIObligation[]): string {
   const active    = obligations.filter(o => o.status === 'active');
@@ -962,39 +962,24 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         }))
         .filter(m => m.content.trim().length > 0);
 
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 500,
-          system: buildSystemPrompt(obligations),
-          tools: RESOLVE_TOOL,
-          messages: history,
-        }),
+      const aiResponse = await callAI({
+        system:    buildSystemPrompt(obligations),
+        messages:  history,
+        model:     'claude-sonnet-4-20250514',
+        maxTokens: 500,
+        tools:     RESOLVE_TOOL,
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || 'API error');
-
-      if (data.stop_reason === 'tool_use') {
-        const toolUse = data.content?.find((c: any) => c.type === 'tool_use');
-        if (toolUse?.name === 'resolve_obligation') {
-          const { obligation_id, obligation_title } = toolUse.input;
-          setPendingResolve({ id: obligation_id, title: obligation_title });
-          const askText = `Should I mark "${obligation_title}" as completed and remove it from your active list?`;
-          setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: askText, timestamp: new Date() }]);
-          if (speakResponse) speakText(`Should I mark ${obligation_title} as completed and remove it from your list?`);
-          return;
-        }
+      if (aiResponse.stopReason === 'tool_use' && aiResponse.toolUse?.name === 'resolve_obligation') {
+        const { obligation_id, obligation_title } = aiResponse.toolUse.input;
+        setPendingResolve({ id: obligation_id, title: obligation_title });
+        const askText = `Should I mark "${obligation_title}" as completed and remove it from your active list?`;
+        setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: askText, timestamp: new Date() }]);
+        if (speakResponse) speakText(`Should I mark ${obligation_title} as completed and remove it from your list?`);
+        return;
       }
 
-      const responseText = data.content?.[0]?.text ?? "Something went wrong. Try again?";
+      const responseText = aiResponse.text || "Something went wrong. Try again?";
       const buddyMsg: Message = { id: uid(), role: 'buddy', text: responseText, timestamp: new Date() };
       setMessages(prev => [...prev, buddyMsg]);
       if (speakResponse) speakText(responseText);

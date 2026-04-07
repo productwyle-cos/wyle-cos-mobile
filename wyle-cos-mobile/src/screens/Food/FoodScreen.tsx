@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NavProp } from '../../../app/index';
+import { callAI } from '../../services/aiService';
 
 const { width } = Dimensions.get('window');
 
@@ -27,7 +28,6 @@ const C = {
   border:     '#1A5060',
 };
 
-const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 
 // ── Claude prompt for food suggestions ───────────────────────────────────────
 const FOOD_SYSTEM_PROMPT = `You are Buddy, the food ordering assistant inside Wyle — a life management app for professionals in Dubai, UAE.
@@ -331,26 +331,12 @@ export default function FoodScreen({ navigation }: { navigation: NavProp }) {
     setError('');
 
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 800,
-          system: FOOD_SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: text }],
-        }),
+      const { text: raw } = await callAI({
+        system:    FOOD_SYSTEM_PROMPT,
+        messages:  [{ role: 'user', content: text }],
+        model:     'claude-sonnet-4-20250514',
+        maxTokens: 800,
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || 'API error');
-
-      const raw = data.content?.[0]?.text ?? '[]';
       // Strip any accidental markdown
       const clean = raw.replace(/```json|```/g, '').trim();
       const parsed: FoodOption[] = JSON.parse(clean);

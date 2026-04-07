@@ -3,8 +3,7 @@
 
 import { MorningBrief, UIObligation } from '../types';
 import { DayProgress } from './snapshotService';
-
-const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
+import { callAI } from './aiService';
 
 // ── Time helpers ───────────────────────────────────────────────────────────────
 
@@ -122,28 +121,12 @@ Rules:
 - headline: MUST mention the actual numbers e.g. "Solid day — 2 done, 1 still waiting on you"
 - tomorrowPreview: reference the highest-risk pending item by name. "You're all clear for tomorrow." if nothing pending.` : ''}`;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 700,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+  const { text: raw } = await callAI({
+    prompt,
+    model:     'claude-sonnet-4-20250514',
+    maxTokens: 700,
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any)?.error?.message ?? 'Brief generation failed');
-  }
-
-  const data = await res.json();
-  const raw   = data.content?.[0]?.text ?? '{}';
   const clean = raw.replace(/```json|```/g, '').trim();
   return JSON.parse(clean) as MorningBrief;
 }

@@ -13,6 +13,7 @@ import { VoiceService } from '../../services/voiceService';
 import { useAppStore } from '../../store';
 import { checkTimeConflicts, fetchEventsForDateRange, detectDayOverload, cancelCalendarEvent, CalendarEvent, fmtTime, fmtDate, OVERLOAD_THRESHOLD } from '../../services/calendarService';
 import type { NavProp } from '../../../app/index';
+import { callAI } from '../../services/aiService';
 
 const C = {
   bg:         '#002F3A',
@@ -28,7 +29,6 @@ const C = {
   border:     '#1A5060',
 };
 
-const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 
 type VoiceState = 'idle' | 'recording' | 'transcribing' | 'parsing' | 'done' | 'error';
 type Risk = 'high' | 'medium' | 'low';
@@ -603,32 +603,13 @@ export default function BrainDumpScreen({ navigation }: { navigation: NavProp })
     }
 
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1500,
-          system: buildBrainDumpSystem(), // uses today's date
-          messages: [{ role: 'user', content: text }],
-        }),
+      const { text: raw } = await callAI({
+        system:    buildBrainDumpSystem(),
+        messages:  [{ role: 'user', content: text }],
+        model:     'claude-sonnet-4-20250514',
+        maxTokens: 1500,
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        const msg: string = data.error?.message ?? '';
-        if (res.status === 402 || msg.toLowerCase().includes('credit') || msg.toLowerCase().includes('balance')) {
-          throw new Error('API_CREDITS_LOW');
-        }
-        throw new Error(msg || `API error ${res.status}`);
-      }
-
-      const raw   = data.content?.[0]?.text ?? '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
       const parsed_json = JSON.parse(clean);
 

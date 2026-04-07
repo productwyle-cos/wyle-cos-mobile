@@ -6,7 +6,7 @@ import { UIObligation } from '../types';
 import { getAllGoogleAccounts, getAccessTokenForEmail } from './googleAuthService';
 import { getAllOutlookAccounts, getAccessTokenForOutlookEmail } from './outlookAuthService';
 
-const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
+import { callAI } from './aiService';
 
 // ── Gmail body helpers ────────────────────────────────────────────────────────
 function decodeBase64Url(data: string): string {
@@ -524,42 +524,16 @@ Each item must follow this schema exactly:
 If nothing actionable found, return: []`;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model:      'claude-3-5-sonnet-20241022',
-        max_tokens: 1500,
-        messages:   [{ role: 'user', content: prompt }],
-      }),
+    const { text: raw } = await callAI({
+      prompt,
+      model:     'claude-3-5-sonnet-20241022',
+      maxTokens: 1500,
     });
-
-    // ── If Claude API fails (low credits, bad key, rate limit) → rule-based ──
-    if (!res.ok) {
-      console.warn(`[SignalService] Claude API error ${res.status} -- using rule-based parser`);
-      return parseEmailsWithRules(emailSnippets, existingObligations);
-    }
-
-    const data  = await res.json();
-
-    // Catch credit exhaustion / quota errors returned in the body
-    if (data.error || !data.content) {
-      console.warn('[SignalService] Claude API quota/error -- using rule-based parser', data.error?.type);
-      return parseEmailsWithRules(emailSnippets, existingObligations);
-    }
-
-    const raw   = data.content?.[0]?.text ?? '[]';
     const clean = raw.replace(/```json|```/g, '').trim();
     const items: UIObligation[] = JSON.parse(clean);
     return items.map((item, i) => ({ ...item, _id: `email_${i}_${Date.now()}` }));
   } catch {
-    // Network error or JSON parse failure -- fall back to rules
-    console.warn('[SignalService] Claude call failed -- using rule-based parser');
+    console.warn('[SignalService] AI call failed -- using rule-based parser');
     return parseEmailsWithRules(emailSnippets, existingObligations);
   }
 }
@@ -593,22 +567,11 @@ Return ONLY a JSON array of new obligations found. Use same schema as before:
 If no obligations found, return: []`;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model:      'claude-3-5-sonnet-20241022',
-        max_tokens: 1000,
-        messages:   [{ role: 'user', content: prompt }],
-      }),
+    const { text: raw } = await callAI({
+      prompt,
+      model:     'claude-3-5-sonnet-20241022',
+      maxTokens: 1000,
     });
-    const data  = await res.json();
-    const raw   = data.content?.[0]?.text ?? '[]';
     const clean = raw.replace(/```json|```/g, '').trim();
     const items: UIObligation[] = JSON.parse(clean);
     return items.map((item, i) => ({ ...item, _id: `cal_${i}_${Date.now()}` }));
