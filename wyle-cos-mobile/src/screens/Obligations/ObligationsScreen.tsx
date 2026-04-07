@@ -19,6 +19,7 @@ import { checkTimeConflicts, fetchEventsForDateRange, CalendarEvent, fmtTime, fm
 import { getAccessToken, getAccessTokenForEmail, getAllGoogleAccounts } from '../../services/googleAuthService';
 import { sendOutlookEmail } from '../../services/outlookCalendarService';
 import { getAllOutlookAccounts } from '../../services/outlookAuthService';
+import { callAI } from '../../services/aiService';
 
 const { width } = Dimensions.get('window');
 
@@ -55,7 +56,6 @@ const TYPE_OPTIONS = [
   { emoji: '💰', label: 'Payment' },    { emoji: '📦', label: 'Other' },
 ];
 
-const ANTHROPIC_API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '';
 
 function buildBrainDumpSystem(): string {
   const DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -988,39 +988,13 @@ function BrainDumpModal({ visible, onClose, onSave, existingObligations, onResol
     }
 
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1500,
-          system: buildBrainDumpSystem(),
-          messages: [{ role: 'user', content: text }],
-        }),
+      const { text: raw } = await callAI({
+        system:    buildBrainDumpSystem(),
+        messages:  [{ role: 'user', content: text }],
+        model:     'claude-sonnet-4-20250514',
+        maxTokens: 1500,
       });
 
-      // ── API error (low credits, bad key, rate limit) → rule-based ────────
-      if (!res.ok) {
-        console.warn(`[BrainDump] Claude API ${res.status} — using rule-based parser`);
-        await applyParsedResponse(parseVoiceWithRules(text));
-        return;
-      }
-
-      const data = await res.json();
-
-      // ── Body-level error (quota exhausted, etc.) → rule-based ─────────────
-      if (data.error || !data.content) {
-        console.warn('[BrainDump] Claude quota/error — using rule-based parser');
-        await applyParsedResponse(parseVoiceWithRules(text));
-        return;
-      }
-
-      const raw   = data.content?.[0]?.text ?? '{}';
       const clean = raw.replace(/```json|```/g, '').trim();
       const parsed_json = JSON.parse(clean);
 
@@ -1420,34 +1394,22 @@ async function improveToneWithClaude(
   body: string,
   context: { toAddress: string; subject: string; obligationTitle: string },
 ): Promise<string> {
-  if (!ANTHROPIC_API_KEY) throw new Error('No Anthropic API key configured.');
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-opus-4-5',
-      max_tokens: 1024,
-      system:
-        'You are a senior C-suite executive assistant. ' +
-        'Rewrite the following email reply to sound authoritative, polished, and professionally warm. ' +
-        'Maintain the original intent and all key details exactly. ' +
-        'Be concise — no filler phrases. Use formal but approachable language. ' +
-        'Do not add greetings or sign-offs unless already present. ' +
-        'Return ONLY the rewritten email body, nothing else.',
-      messages: [{
-        role: 'user',
-        content:
-          `To: ${context.toAddress}\nSubject: ${context.subject}\nRegarding: ${context.obligationTitle}\n\nCurrent draft:\n${body}`,
-      }],
-    }),
+  const { text } = await callAI({
+    system:
+      'You are a senior C-suite executive assistant. ' +
+      'Rewrite the following email reply to sound authoritative, polished, and professionally warm. ' +
+      'Maintain the original intent and all key details exactly. ' +
+      'Be concise — no filler phrases. Use formal but approachable language. ' +
+      'Do not add greetings or sign-offs unless already present. ' +
+      'Return ONLY the rewritten email body, nothing else.',
+    messages: [{
+      role: 'user',
+      content: `To: ${context.toAddress}\nSubject: ${context.subject}\nRegarding: ${context.obligationTitle}\n\nCurrent draft:\n${body}`,
+    }],
+    model:     'claude-opus-4-5',
+    maxTokens: 1024,
   });
-  if (!res.ok) throw new Error(`Claude API error ${res.status}`);
-  const data = await res.json();
-  return (data.content?.[0]?.text ?? body).trim();
+  return (text ?? body).trim();
 }
 
 /** Rule-based draft fallback — used when no Claude key or API fails */
@@ -1494,27 +1456,17 @@ async function autoDraftReply(ob: any): Promise<string> {
       `From: ${ob.replyTo ?? 'Unknown sender'}\n` +
       `Context: ${ob.notes ?? ob.executionPath ?? 'No additional context'}\n` +
       `Obligation type: ${ob.type ?? 'reply_needed'}`;
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-opus-4-5',
-        max_tokens: 512,
-        system:
-          'You are a senior C-suite executive assistant drafting a professional email reply. ' +
-          'Write a concise, polished reply (3–5 sentences) in the tone of a high-level executive. ' +
-          'Be direct and professional. End with "Best regards" on a new line. ' +
-          'Return ONLY the email body — no subject, no headers.',
-        messages: [{ role: 'user', content: `Draft a reply to this email:\n${context}` }],
-      }),
+    const { text } = await callAI({
+      system:
+        'You are a senior C-suite executive assistant drafting a professional email reply. ' +
+        'Write a concise, polished reply (3–5 sentences) in the tone of a high-level executive. ' +
+        'Be direct and professional. End with "Best regards" on a new line. ' +
+        'Return ONLY the email body — no subject, no headers.',
+      messages: [{ role: 'user', content: `Draft a reply to this email:\n${context}` }],
+      model:     'claude-opus-4-5',
+      maxTokens: 512,
     });
-    if (!res.ok) return autoDraftWithRules(ob);
-    const data = await res.json();
-    return (data.content?.[0]?.text ?? autoDraftWithRules(ob)).trim();
+    return (text ?? autoDraftWithRules(ob)).trim();
   } catch {
     return autoDraftWithRules(ob);
   }
