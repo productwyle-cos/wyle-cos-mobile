@@ -448,7 +448,14 @@ function ObligationCard({ item, onPress, onResolve, onReply }: any) {
           <Text style={styles.cardEmoji}>{item.emoji}</Text>
         </View>
         <View style={styles.cardBody}>
-          <Text style={styles.cardTitle}>{item.title}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={styles.cardTitle}>{item.title}</Text>
+            {item.source === 'whatsapp' && (
+              <View style={styles.sourceBadge}>
+                <Text style={styles.sourceBadgeText}>💬 WA</Text>
+              </View>
+            )}
+          </View>
           {item.notes && <Text style={styles.cardNotes} numberOfLines={1}>{item.notes}</Text>}
           <View style={styles.cardMeta}>
             <View style={[styles.riskPill, { backgroundColor: `${riskColor}18`, borderColor: `${riskColor}38` }]}>
@@ -2299,6 +2306,8 @@ const styles = StyleSheet.create({
   cardTitle:    { color: C.white, fontSize: 15, fontWeight: '600' },
   cardNotes:    { color: C.textTer, fontSize: 12 },
   cardMeta:     { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  sourceBadge:     { backgroundColor: '#25D36618', borderColor: '#25D36638', borderWidth: 1, borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
+  sourceBadgeText: { color: '#25D366', fontSize: 10, fontWeight: '700' },
   riskPill:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, borderWidth: 1 },
   riskPillText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
   daysText:     { fontSize: 12, fontWeight: '700' },
