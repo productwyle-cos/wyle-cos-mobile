@@ -979,12 +979,12 @@ Respond ONLY with the raw JSON object. No markdown, no explanation, no code fenc
         return;
       }
 
-      const responseText = aiResponse.text || "Something went wrong. Try again?";
+      const responseText = aiResponse.text || "I'm having trouble reaching the AI right now. Please check that EXPO_PUBLIC_GROQ_API_KEY is set in .env and restart the app.";
       const buddyMsg: Message = { id: uid(), role: 'buddy', text: responseText, timestamp: new Date() };
       setMessages(prev => [...prev, buddyMsg]);
       if (speakResponse) speakText(responseText);
     } catch {
-      const fallback = "I'm having a connection issue. Your most urgent item is your UAE visa — it expires in 8 days. Want me to walk you through the GDRFA renewal process?";
+      const fallback = "I'm having trouble reaching the AI right now. Please check that EXPO_PUBLIC_GROQ_API_KEY is set in .env and restart the app.";
       setMessages(prev => [...prev, { id: uid(), role: 'buddy', text: fallback, timestamp: new Date() }]);
       if (speakResponse) speakText(fallback);
     } finally {
