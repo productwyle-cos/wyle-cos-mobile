@@ -126,9 +126,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     obligations: [ob, ...state.obligations],
   })),
 
-  addObligations: (obs) => set((state) => ({
-    obligations: [...obs, ...state.obligations],
-  })),
+  addObligations: (obs) => set((state) => {
+    // Never re-add obligations the user has already resolved
+    const completedIds = new Set(
+      state.obligations.filter(o => o.status === 'completed').map(o => o._id)
+    );
+    // Also deduplicate — don't add if already in the list as active
+    const existingIds = new Set(state.obligations.map(o => o._id));
+    const toAdd = obs.filter(o => !completedIds.has(o._id) && !existingIds.has(o._id));
+    return { obligations: [...toAdd, ...state.obligations] };
+  }),
 
   resolveObligation: (id) => set((state) => ({
     obligations: state.obligations.map(o =>

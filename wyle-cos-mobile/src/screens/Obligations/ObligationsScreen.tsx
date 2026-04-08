@@ -1998,7 +1998,15 @@ export default function ObligationsScreen({ navigation }: { navigation: NavProp 
             <ObligationCard
               item={item}
               onPress={(it: any) => { setSelected(it); setDetail(true); }}
-              onResolve={(it: any) => resolveObligation(it._id)}
+              onResolve={async (it: any) => {
+                resolveObligation(it._id);
+                if (it.source === 'whatsapp') {
+                  try {
+                    const { dismissWhatsAppObligation } = await import('../../services/whatsappService');
+                    await dismissWhatsAppObligation(it._id);
+                  } catch {}
+                }
+              }}
               onReply={(it: UIObligation) => { setReplyObligation(it); setReplyVisible(true); }}
             />
           </Animated.View>
