@@ -87,15 +87,31 @@ function mapIcon(type: WAObligation['type']): string {
 // ── Convert backend WAObligation → UIObligation ───────────────────────────────
 function toUIobligation(wa: WAObligation): UIObligation {
   const senderLabel = wa.senderName || wa.senderPhone || 'WhatsApp';
+
+  // Recalculate daysUntil from TODAY:
+  // Use meetingTime if the backend extracted it, otherwise estimate via createdAt + original daysUntil
+  const actualDueMs = wa.meetingTime
+    ? new Date(wa.meetingTime).getTime()
+    : new Date(wa.createdAt).getTime() + wa.daysUntil * 24 * 60 * 60 * 1000;
+
+  const actualDaysUntil = Math.round((actualDueMs - Date.now()) / (24 * 60 * 60 * 1000));
+
+  // If the due date has already passed, mark as completed so it's filtered out
+  const isExpired = actualDaysUntil < 0;
+
+  // Recalculate risk based on actual days remaining
+  const actualRisk: 'high' | 'medium' | 'low' =
+    actualDaysUntil <= 1 ? 'high' : actualDaysUntil <= 7 ? 'medium' : 'low';
+
   return {
     _id:           wa.id,
     emoji:         mapIcon(wa.type),
     title:         wa.title,
     type:          wa.type,
-    daysUntil:     wa.daysUntil,
-    risk:          wa.risk,
+    daysUntil:     actualDaysUntil,
+    risk:          isExpired ? wa.risk : actualRisk,
     amount:        null,
-    status:        wa.status === 'pending' ? 'active' : 'completed',
+    status:        isExpired || wa.status !== 'pending' ? 'completed' : 'active',
     executionPath: wa.suggestedReply ?? '',
     notes:         wa.originalMessage ? `${senderLabel}: ${wa.originalMessage}` : null,
     source:        'whatsapp',
