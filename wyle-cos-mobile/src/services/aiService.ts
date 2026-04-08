@@ -1,10 +1,10 @@
 // src/services/aiService.ts
-// Unified AI caller: Claude → Groq → Gemini → Together AI
+// Unified AI caller: Claude → Groq → Gemini → OpenRouter
 
 const ANTHROPIC_API_KEY  = (process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY  ?? '').trim();
 const GROQ_API_KEY       = (process.env.EXPO_PUBLIC_GROQ_API_KEY       ?? '').trim();
 const GEMINI_API_KEY     = (process.env.EXPO_PUBLIC_GEMINI_API_KEY      ?? '').trim();
-const TOGETHER_API_KEY   = (process.env.EXPO_PUBLIC_TOGETHER_API_KEY    ?? '').trim();
+const OPENROUTER_API_KEY = (process.env.EXPO_PUBLIC_OPENROUTER_API_KEY  ?? '').trim();
 
 type Role = 'user' | 'assistant';
 
@@ -63,20 +63,20 @@ async function callGemini(req: AIRequest): Promise<AIResponse> {
   return { text: data.candidates?.[0]?.content?.parts?.[0]?.text ?? '', stopReason: 'end_turn', toolUse: null };
 }
 
-// ── Together AI (OpenAI-compatible, $5 free credit) ───────────────────────────
-async function callTogether(req: AIRequest): Promise<AIResponse> {
-  if (!TOGETHER_API_KEY) throw new Error('No Together AI key configured');
+// ── OpenRouter (free models, no expiry) ───────────────────────────────────────
+async function callOpenRouter(req: AIRequest): Promise<AIResponse> {
+  if (!OPENROUTER_API_KEY) throw new Error('No OpenRouter API key configured');
   const msgs: AIMessage[] = req.messages ?? (req.prompt ? [{ role: 'user', content: req.prompt }] : []);
-  const togetherMessages: any[] = [];
-  if (req.system) togetherMessages.push({ role: 'system', content: req.system });
-  togetherMessages.push(...msgs.map(m => ({ role: m.role, content: m.content })));
-  const res = await fetch('https://api.together.xyz/v1/chat/completions', {
+  const orMessages: any[] = [];
+  if (req.system) orMessages.push({ role: 'system', content: req.system });
+  orMessages.push(...msgs.map(m => ({ role: m.role, content: m.content })));
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOGETHER_API_KEY}` },
-    body: JSON.stringify({ model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free', messages: togetherMessages, max_tokens: req.maxTokens ?? 1000 }),
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENROUTER_API_KEY}` },
+    body: JSON.stringify({ model: 'meta-llama/llama-3.1-8b-instruct:free', messages: orMessages, max_tokens: req.maxTokens ?? 1000 }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message ?? 'Together AI error');
+  if (!res.ok) throw new Error(data.error?.message ?? 'OpenRouter API error');
   return { text: data.choices?.[0]?.message?.content ?? '', stopReason: 'end_turn', toolUse: null };
 }
 
@@ -115,13 +115,13 @@ export async function callAI(req: AIRequest): Promise<AIResponse> {
   // 3. Gemini
   try {
     return await callGemini(req);
-  } catch (e: any) { console.warn('[AIService] Gemini failed:', e?.message, '— falling back to Together AI'); }
+  } catch (e: any) { console.warn('[AIService] Gemini failed:', e?.message, '— falling back to OpenRouter'); }
 
-  // 4. Together AI
+  // 4. OpenRouter (free tier, no expiry)
   try {
-    return await callTogether(req);
+    return await callOpenRouter(req);
   } catch (e: any) {
-    console.error('[AIService] Together AI also failed:', e?.message);
+    console.error('[AIService] OpenRouter also failed:', e?.message);
     return { text: '', stopReason: 'error', toolUse: null };
   }
 }
