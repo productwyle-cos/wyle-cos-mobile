@@ -23,7 +23,7 @@ import {
   disconnectOutlookAccount, getAllOutlookAccounts,
 } from '../../services/outlookAuthService';
 import { runFullSignalScan } from '../../services/signalService';
-import { getWhatsAppStatus, getWhatsAppQR } from '../../services/whatsappService';
+import { getWhatsAppStatus, getWhatsAppQR, disconnectWhatsApp } from '../../services/whatsappService';
 
 const { width } = Dimensions.get('window');
 
@@ -694,6 +694,15 @@ export default function ConnectScreen({ navigation }: { navigation: NavProp }) {
                   <View style={[s.accountPrimaryBadge, { backgroundColor: '#25D36618' }]}>
                     <Text style={[s.accountPrimaryText, { color: '#25D366' }]}>Connected</Text>
                   </View>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      await disconnectWhatsApp();
+                      setWaConnected(false);
+                    }}
+                    style={{ marginLeft: 8, backgroundColor: '#FF3B3018', borderRadius: 999, padding: 6 }}
+                  >
+                    <Text style={{ fontSize: 13, color: '#FF3B30' }}>✕</Text>
+                  </TouchableOpacity>
                 </View>
               ) : (
                 <TouchableOpacity
