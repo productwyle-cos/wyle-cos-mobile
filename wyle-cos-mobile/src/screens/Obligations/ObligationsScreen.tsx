@@ -531,6 +531,17 @@ function DetailModal({ item, visible, onClose, onResolve, onReply }: any) {
               )}
             </View>
 
+            {/* WhatsApp original message */}
+            {item.source === 'whatsapp' && !!item.notes && (
+              <View style={[modal.sectionBlock, { borderLeftWidth: 3, borderLeftColor: '#25D366', backgroundColor: '#25D36610' }]}>
+                <Text style={[modal.sectionLabel, { color: '#25D366' }]}>💬 WHATSAPP MESSAGE</Text>
+                <Text style={modal.sectionText}>{item.notes}</Text>
+                {!!item.replyTo && (
+                  <Text style={{ color: C.textSec, fontSize: 11, marginTop: 6 }}>From: {item.replyTo}</Text>
+                )}
+              </View>
+            )}
+
             {/* Key message — AI-extracted plain-English summary */}
             {!!item.keyMessage && (
               <View style={modal.sectionBlock}>
