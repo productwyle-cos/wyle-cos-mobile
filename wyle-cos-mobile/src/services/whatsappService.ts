@@ -138,6 +138,19 @@ export async function fetchWhatsAppObligations(): Promise<UIObligation[]> {
   }
 }
 
+// ── Disconnect WhatsApp session ───────────────────────────────────────────────
+export async function disconnectWhatsApp(): Promise<boolean> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/whatsapp/logout`, {
+      method:  'POST',
+      headers: headers(),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── Dismiss an obligation ─────────────────────────────────────────────────────
 export async function dismissWhatsAppObligation(id: string): Promise<boolean> {
   try {
