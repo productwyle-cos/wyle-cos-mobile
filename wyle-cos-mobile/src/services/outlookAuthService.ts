@@ -64,10 +64,16 @@ const PKCE_KEYS = {
 // Shared provider marker — tells Google handler "this is a Microsoft flow"
 const PROVIDER_KEY = 'wyle_oauth_provider';
 
-// ── Storage helpers ───────────────────────────────────────────────────────────
-function store(key: string, val: string) { localStorage.setItem(key, val); }
-function load(key: string): string | null { return localStorage.getItem(key); }
-function remove(key: string) { localStorage.removeItem(key); }
+// ── Storage helpers (web-safe) ────────────────────────────────────────────────
+function store(key: string, val: string) {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(key, val); } catch {}
+}
+function load(key: string): string | null {
+  try { return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null; } catch { return null; }
+}
+function remove(key: string) {
+  try { if (typeof localStorage !== 'undefined') localStorage.removeItem(key); } catch {}
+}
 
 // ── Per-account key builders ──────────────────────────────────────────────────
 function accountKeys(email: string) {

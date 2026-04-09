@@ -176,14 +176,15 @@ async function startWebRedirect(mode: 'sign_in' | 'add_account' = 'sign_in'): Pr
   const { verifier, challenge } = await generatePKCE();
   const state = randomState();
 
-  // Save everything needed after the redirect comes back
-  localStorage.setItem(WEB_PKCE_KEYS.VERIFIER,     verifier);
-  localStorage.setItem(WEB_PKCE_KEYS.STATE,        state);
-  localStorage.setItem(WEB_PKCE_KEYS.REDIRECT_URI, redirectUri);
-  localStorage.setItem(WEB_PKCE_KEYS.CLIENT_ID,    clientId);
-  localStorage.setItem(WEB_PKCE_KEYS.MODE,         mode);
-  // Mark as Google flow so Microsoft callback handler skips it
-  localStorage.setItem('wyle_oauth_provider', 'google');
+  // Save everything needed after the redirect comes back (web only)
+  if (Platform.OS === 'web' && typeof localStorage !== 'undefined') {
+    localStorage.setItem(WEB_PKCE_KEYS.VERIFIER,     verifier);
+    localStorage.setItem(WEB_PKCE_KEYS.STATE,        state);
+    localStorage.setItem(WEB_PKCE_KEYS.REDIRECT_URI, redirectUri);
+    localStorage.setItem(WEB_PKCE_KEYS.CLIENT_ID,    clientId);
+    localStorage.setItem(WEB_PKCE_KEYS.MODE,         mode);
+    localStorage.setItem('wyle_oauth_provider', 'google');
+  }
 
   const prompt = mode === 'add_account' ? 'select_account' : 'consent';
 
