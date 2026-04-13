@@ -608,6 +608,9 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
 
         {/* Header */}
         <View style={s.header}>
+          <TouchableOpacity onPress={() => nav.goBack()} style={s.backBtn}>
+            <Text style={s.backIcon}>‹</Text>
+          </TouchableOpacity>
           <View style={s.headerLeft}>
             <Text style={s.headerTitle}>Document Wallet</Text>
             <View style={s.headerSubRow}>
@@ -818,7 +821,7 @@ const s = StyleSheet.create({
 
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingTop: 14,
@@ -826,6 +829,8 @@ const s = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: C.border,
   },
+  backBtn:  { width: 36, height: 36, borderRadius: 10, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.border, marginRight: 10 },
+  backIcon: { color: C.verdigris, fontSize: 22, fontWeight: '600', lineHeight: 26 },
   headerLeft:  { flex: 1, marginRight: 12 },
   headerTitle: { color: C.white, fontSize: 22, fontWeight: '800', letterSpacing: -0.3 },
   headerSubRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
