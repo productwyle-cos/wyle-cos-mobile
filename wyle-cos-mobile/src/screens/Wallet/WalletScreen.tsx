@@ -22,6 +22,7 @@ import {
 import type { NavProp } from '../../../app/index';
 
 const ANTHROPIC_API_KEY = (process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '') as string;
+const GEMINI_API_KEY    = (process.env.EXPO_PUBLIC_GEMINI_API_KEY    ?? '') as string;
 
 const EXTRACTION_PROMPT = `You are analysing a document uploaded by the user. Extract all key information.
 
@@ -483,30 +484,60 @@ export default function WalletScreen({ navigation }: { navigation: NavProp }) {
         return;
       }
 
-      // Extract with Claude
+      // Extract document info — try Anthropic first, fall back to Gemini
       setUploadStatus('Extracting document info…');
       const blocks = await buildFileBlocks(uri, mimeType, name, b64);
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          messages: [{ role: 'user', content: [...blocks, { type: 'text', text: EXTRACTION_PROMPT }] }],
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message ?? 'Claude API error');
 
       let extracted: any = null;
-      try {
-        extracted = JSON.parse(data.content?.[0]?.text?.replace(/```json|```/g, '').trim() ?? '');
-      } catch { /* use fallback metadata */ }
+
+      // ── Attempt 1: Anthropic Claude ──────────────────────────────────────────
+      if (ANTHROPIC_API_KEY) {
+        try {
+          const res = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01',
+              'anthropic-dangerous-direct-browser-access': 'true',
+            },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              max_tokens: 1024,
+              messages: [{ role: 'user', content: [...blocks, { type: 'text', text: EXTRACTION_PROMPT }] }],
+            }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            extracted = JSON.parse(data.content?.[0]?.text?.replace(/```json|```/g, '').trim() ?? '');
+          } else {
+            console.warn('[Wallet] Anthropic failed, falling back to Gemini:', data.error?.message);
+          }
+        } catch { /* fall through to Gemini */ }
+      }
+
+      // ── Attempt 2: Google Gemini ──────────────────────────────────────────────
+      if (!extracted && GEMINI_API_KEY) {
+        const geminiParts: any[] = [
+          { inline_data: { mime_type: mimeType.startsWith('image') ? mimeType : 'image/jpeg', data: b64 } },
+          { text: EXTRACTION_PROMPT },
+        ];
+        const gRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: geminiParts }] }),
+          },
+        );
+        const gData = await gRes.json();
+        if (!gRes.ok) throw new Error(gData.error?.message ?? 'Gemini API error');
+        try {
+          extracted = JSON.parse(
+            gData.candidates?.[0]?.content?.parts?.[0]?.text?.replace(/```json|```/g, '').trim() ?? '',
+          );
+        } catch { /* use fallback metadata */ }
+      }
 
       // Upload to Drive
       setUploadStatus('Saving to Google Drive…');
