@@ -280,7 +280,7 @@ function detectType(text: string): { type: string; emoji: string } {
   if (/appointment|confirm.*attend|please confirm|booking confirm|reservation/.test(t)) return { type: 'appointment', emoji: '📅' };
   if (/subscription.*expir|renew.*subscription|auto-renew|membership.*expir/.test(t)) return { type: 'subscription', emoji: '🔄' };
   if (/medical|doctor.*appoint|hospital|clinic|prescription/.test(t))              return { type: 'medical',          emoji: '🏥' };
-  if (/please reply|let me know|your feedback|awaiting.*response|kindly respond|get back to me|your response needed/.test(t)) return { type: 'reply_needed', emoji: '📧' };
+  if (/please reply|let me know|your feedback|share your feedback|awaiting.*response|kindly respond|get back to me|your response needed|review.*proposal|please review|project proposal|meeting invite|join.*meeting|invited you|review.*request/.test(t)) return { type: 'reply_needed', emoji: '📧' };
   return { type: 'task', emoji: '📌' };
 }
 
@@ -341,7 +341,7 @@ function isInformational(text: string): boolean {
 
 function isActionable(text: string): boolean {
   if (isInformational(text)) return false;
-  return /due|expir|invoice|sign|renew|reply|respond|feedback|outstanding|overdue|deadline|urgent|action required|please pay|visa|emirates id|registr|insurance|bill|utility|subscription|appointment|awaiting|kindly|please confirm|let me know|payment\s+due|amount\s+due|balance\s+due|please\s+(review|complete|submit|approve|respond|sign|pay|confirm|update|verify)/i.test(text);
+  return /due|expir|invoice|sign|renew|reply|respond|feedback|outstanding|overdue|deadline|urgent|action required|please pay|visa|emirates id|registr|insurance|bill|utility|subscription|appointment|awaiting|kindly|please confirm|let me know|payment\s+due|amount\s+due|balance\s+due|please\s+(review|complete|submit|approve|respond|sign|pay|confirm|update|verify)|project proposal|proposal.*review|meeting invite|invited you|review.*request|share.*feedback|your.*feedback/i.test(text);
 }
 
 // Generic subjects that carry no context on their own
@@ -531,7 +531,15 @@ If nothing actionable found, return: []`;
     });
     const clean = raw.replace(/```json|```/g, '').trim();
     const items: UIObligation[] = JSON.parse(clean);
-    return items.map((item, i) => ({ ...item, _id: `email_${i}_${Date.now()}` }));
+    const aiResults = items.map((item, i) => ({ ...item, _id: `email_${i}_${Date.now()}` }));
+
+    // Safety net: if AI returns empty, always run rule-based parser as backup
+    // This ensures emails like proposals/invites aren't missed when AI under-detects
+    if (aiResults.length === 0) {
+      console.warn('[SignalService] AI returned empty — running rule-based parser as safety net');
+      return parseEmailsWithRules(emailSnippets, existingObligations);
+    }
+    return aiResults;
   } catch {
     console.warn('[SignalService] AI call failed -- using rule-based parser');
     return parseEmailsWithRules(emailSnippets, existingObligations);
